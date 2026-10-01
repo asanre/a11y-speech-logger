@@ -2,9 +2,9 @@
 """Capture an accessibility session per screen and run deterministic rules over it.
 
   audit.py capture <screen> [--out audits] [--serial SERIAL]
-      Clears logcat, dumps the node tree and takes a screenshot (screen-start.png), waits
-      while you walk the screen with TalkBack, dumps and screenshots again (screen-end.png),
-      then saves session.txt and runs `rules`.
+      Clears logcat, dumps the node tree and takes a screenshot (screen-start.png), shows
+      focus and speech live while you walk the screen with TalkBack, dumps and screenshots
+      again when you press Enter (screen-end.png), then saves session.txt and runs `rules`.
 
   audit.py rules <dir>
       Parses <dir>/session.txt and writes <dir>/findings.json.
@@ -18,6 +18,7 @@ import json
 import re
 import subprocess
 import sys
+import threading
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -85,27 +86,29 @@ def parse_fields(text):
     return fields
 
 
-def parse_session(path):
-    records = []
-    for line in Path(path).read_text(encoding="utf-8").splitlines():
-        m = RECORD.match(line)
-        if not m:
-            continue
-        kind, t, rest = m.group(1), int(m.group(2)), m.group(3)
-        record = {"kind": kind, "t": t}
-        if kind == "speech":
-            record["text"] = unquote(rest.strip())
-        elif kind == "tree":
-            stripped = rest.lstrip(" ")
-            if stripped.startswith(("begin", "end", "no active window")):
-                record["marker"] = stripped
-            else:
-                record["depth"] = (len(rest) - len(stripped)) // 2
-                record.update(parse_fields(stripped))
+def parse_record(line):
+    m = RECORD.match(line)
+    if not m:
+        return None
+    kind, t, rest = m.group(1), int(m.group(2)), m.group(3)
+    record = {"kind": kind, "t": t}
+    if kind == "speech":
+        record["text"] = unquote(rest.strip())
+    elif kind == "tree":
+        stripped = rest.lstrip(" ")
+        if stripped.startswith(("begin", "end", "no active window")):
+            record["marker"] = stripped
         else:
-            record.update(parse_fields(rest))
-        records.append(record)
-    return records
+            record["depth"] = (len(rest) - len(stripped)) // 2
+            record.update(parse_fields(stripped))
+    else:
+        record.update(parse_fields(rest))
+    return record
+
+
+def parse_session(path):
+    records = (parse_record(line) for line in Path(path).read_text(encoding="utf-8").splitlines())
+    return [r for r in records if r]
 
 
 # --- rules ---------------------------------------------------------------------------------
@@ -276,9 +279,12 @@ def run_rules(records):
 
 # --- commands ------------------------------------------------------------------------------
 
+def adb_cmd(serial, *args):
+    return ["adb"] + (["-s", serial] if serial else []) + list(args)
+
+
 def adb(serial, *args, binary=False):
-    cmd = ["adb"] + (["-s", serial] if serial else []) + list(args)
-    result = subprocess.run(cmd, capture_output=True, check=True)
+    result = subprocess.run(adb_cmd(serial, *args), capture_output=True, check=True)
     return result.stdout if binary else result.stdout.decode("utf-8", "replace")
 
 
@@ -305,6 +311,40 @@ def snapshot(serial, path):
     path.write_bytes(adb(serial, "exec-out", "screencap", "-p", binary=True))
 
 
+def live_line(record):
+    """A short line per record to follow the walk; session.txt keeps the full records."""
+    def quoted(text, limit=160):
+        text = text if len(text) <= limit else text[:limit] + "…"
+        return json.dumps(text, ensure_ascii=False)
+
+    kind = record["kind"]
+    if kind == "speech":
+        return f"    {quoted(record['text'])}"
+    if kind == "focus":
+        name = quoted(label(record)) if label(record) else "(no label)"
+        issues = f" [{','.join(record['issues'])}]" if record["issues"] else ""
+        return f"→ {record.get('class')} {name}{issues}"
+    if kind == "tree":
+        marker = record.get("marker", "")
+        return f"[tree] {marker.removeprefix('end ')}" if marker.startswith(("end", "no active")) else None
+    return f"[{kind}] {quoted(record.get('text') or record.get('class') or '')}"
+
+
+def follow(serial):
+    """Prints the log as it is written, until the returned process is terminated."""
+    proc = subprocess.Popen(adb_cmd(serial, "logcat", "-s", f"{LOG_TAG}:I", "-v", "raw"),
+                            stdout=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
+
+    def pump():
+        for line in proc.stdout:
+            record = parse_record(line.rstrip("\n"))
+            if record and (shown := live_line(record)):
+                print(shown, flush=True)
+
+    threading.Thread(target=pump, daemon=True).start()
+    return proc
+
+
 def read_session(serial, dumps):
     """The dump is logged asynchronously by the service: wait until all of them are in the log."""
     for _ in range(20):
@@ -319,8 +359,11 @@ def capture(args):
     warn_if_not_ready(args.serial)
     folder = output_dir(args.out, args.screen)
     adb(args.serial, "logcat", "-c")
+    viewer = follow(args.serial)
     snapshot(args.serial, folder / "screen-start.png")
-    input(f"Walk '{args.screen}' with TalkBack, then press Enter to save… ")
+    print(f"Walk '{args.screen}' with TalkBack, then press Enter to save.\n")
+    input()
+    viewer.terminate()
     # Dumped again because the screen can change after the capture starts (a sheet opened, a scroll).
     snapshot(args.serial, folder / "screen-end.png")
     session = read_session(args.serial, dumps=2)
