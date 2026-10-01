@@ -116,7 +116,7 @@ All of them are heuristics to verify, not verdicts.
 
 | Rule | Where | Severity | Meaning |
 |---|---|---|---|
-| `NO_LABEL` | APK | high | Actionable, with no text, description or children to read from |
+| `NO_LABEL` | APK | high | Actionable, with no text or description of its own or in any non-actionable descendant, so TalkBack has nothing to read |
 | `EDIT_NO_HINT` | APK | medium | Empty `EditText` without a hint, e.g. a placeholder drawn as a separate text |
 | `SMALL_TARGET` | APK | medium | Actionable and smaller than 48dp on one side |
 | `LABEL_IN_CHILD` | APK | low | Actionable without its own label; the only label is the content description of a non-actionable descendant (an icon button with the description on the icon). TalkBack often reads it fine; other services may not |

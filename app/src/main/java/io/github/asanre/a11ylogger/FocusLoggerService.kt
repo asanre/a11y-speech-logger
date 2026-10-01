@@ -82,12 +82,7 @@ class FocusLoggerService : AccessibilityService() {
         val actionable = isClickable || isLongClickable
         val unlabeled = text.isNullOrBlank() && contentDescription.isNullOrBlank()
         val issues = buildList {
-            if (actionable && unlabeled) {
-                when {
-                    childCount == 0 -> add("NO_LABEL")
-                    hasLabelOnlyInIconChild() -> add("LABEL_IN_CHILD")
-                }
-            }
+            if (actionable && unlabeled) labelIssue()?.let(::add)
             if (actionable && minOf(widthDp, heightDp) < MIN_TOUCH_TARGET_DP) add("SMALL_TARGET")
             if (className?.toString() == EDIT_TEXT_CLASS && text.isNullOrEmpty() && hintTextOrNull().isNullOrEmpty()) {
                 add("EDIT_NO_HINT")
@@ -117,14 +112,22 @@ class FocusLoggerService : AccessibilityService() {
     }
 
     /**
-     * The label sits on a non-actionable descendant that has only a content description, the shape of
-     * an icon button whose description is on the icon, however deep the icon is wrapped. Descendants
-     * with text are left out: a clickable row of text views is the normal View pattern and TalkBack
-     * reads it fine.
+     * Where an unlabeled actionable node can take its name from, among its non-actionable descendants:
+     * - nowhere, `NO_LABEL`: no descendant has text or a description, so TalkBack has nothing to read
+     *   (descendants hidden from accessibility, or decorative only);
+     * - content descriptions only, `LABEL_IN_CHILD`: an icon button whose description is on the icon,
+     *   however deep the icon is wrapped. With text it is a clickable row of text views, the normal View
+     *   pattern, and TalkBack reads it fine.
      */
-    private fun AccessibilityNodeInfo.hasLabelOnlyInIconChild(): Boolean {
+    private fun AccessibilityNodeInfo.labelIssue(): String? {
         val inner = innerDescendants().toList()
-        return inner.none { !it.text.isNullOrBlank() } && inner.any { !it.contentDescription.isNullOrBlank() }
+        val hasText = inner.any { !it.text.isNullOrBlank() }
+        val hasDescription = inner.any { !it.contentDescription.isNullOrBlank() }
+        return when {
+            !hasText && !hasDescription -> "NO_LABEL"
+            !hasText -> "LABEL_IN_CHILD"
+            else -> null
+        }
     }
 
     /** Descendants down to, not into, nested actionable nodes: those are controls of their own. */
