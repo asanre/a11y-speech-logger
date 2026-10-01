@@ -139,6 +139,12 @@ fun HomeScreen(setup: Setup) {
                 }
             }
             item {
+                FaqItem(R.string.faq_live_q) {
+                    Paragraph(R.string.faq_live_a)
+                    Command("adb logcat -s A11ySpeech:I -v raw")
+                }
+            }
+            item {
                 FaqItem(R.string.faq_capture_q) {
                     Paragraph(R.string.faq_capture_clear)
                     Command("adb logcat -c")

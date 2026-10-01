@@ -35,6 +35,9 @@
     <string name="faq_talkback_off">Turn them off, keeping the other services:</string>
     <string name="faq_talkback_note">The commands are built from the services enabled when this screen opened. Come back to it after changing them in Settings.</string>
 
+    <string name="faq_live_q">How do I see what TalkBack says?</string>
+    <string name="faq_live_a">While the speech logger is the default engine, TalkBack is silent. Follow what it says, and what it focuses, from a computer:</string>
+
     <string name="faq_capture_q">How do I capture a session?</string>
     <string name="faq_capture_clear">1. Clear the log:</string>
     <string name="faq_capture_dump">2. Navigate with TalkBack. Optionally snapshot the current screen\'s node tree:</string>

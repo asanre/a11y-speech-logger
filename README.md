@@ -53,11 +53,12 @@ adb shell settings delete secure tts_default_synth
 Per screen, with `tools/audit.py` (Python 3 and `adb` only):
 
 ```bash
-python3 tools/audit.py capture checkout   # dumps the tree, screenshots, waits while you walk the screen, dumps again
+python3 tools/audit.py capture checkout   # dumps the tree, screenshots, shows the walk live, dumps again on Enter
 python3 tools/audit.py rules audits/2026-10-01/checkout   # re-run the rules on an existing capture
 ```
 
-`capture` warns you if the engine or the service isn't active. It writes
+`capture` warns you if the engine or the service isn't active. While you walk the screen it prints
+each focus and what TalkBack says, one short line each, since TalkBack itself is silent. It writes
 `audits/<date>/<screen>/` with `session.txt`, `screen-start.png`, `screen-end.png` and
 `findings.json`. The tree is dumped at the start and again when you press Enter, because the screen
 can change in between (a sheet opens, a list scrolls). The rules use the last dump, and only the
@@ -67,6 +68,7 @@ because it contains screenshots of the audited app.
 Or by hand:
 
 ```bash
+adb logcat -s A11ySpeech:I -v raw                           # follow what TalkBack says, live
 adb logcat -c                                               # start a clean session
 adb shell am broadcast -a io.github.asanre.a11ylogger.DUMP  # snapshot the current screen's tree
 adb logcat -d -s A11ySpeech:I -v raw > session.txt          # save and exit
