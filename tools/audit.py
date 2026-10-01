@@ -30,7 +30,6 @@ LOG_TAG = "A11ySpeech"
 SILENT_FOCUS_MS = 1500
 # An upward jump bigger than this between consecutive focuses suggests a reading-order problem.
 ORDER_JUMP_DP = 48
-ROLE_WORDS = re.compile(r"\b(button|botón|boton)\b", re.IGNORECASE)
 SYSTEM_PACKAGES = {"com.android.systemui", "android"}
 
 SEVERITY = {
@@ -133,6 +132,15 @@ def finding(rule, source, node=None, detail=None, t=None):
     }
 
 
+def repeats_role(utterance):
+    """TalkBack appends the role as the last segment ("…, Button") in the device's language.
+    If that single word already appears earlier ("Add button, Button"), the label repeats the role."""
+    *rest, last = [part.strip() for part in utterance.split(",")]
+    if not rest or not re.fullmatch(r"\w+", last):
+        return False
+    return re.search(rf"\b{re.escape(last)}\b", ", ".join(rest), re.IGNORECASE) is not None
+
+
 def build_timeline(focuses, speeches):
     """Each focus owns the utterances spoken before the next focus. Approximate when swiping fast."""
     timeline = []
@@ -176,7 +184,7 @@ def run_rules(records):
         if lingered and not any(s.strip() for s in entry["speech"]):
             findings.append(finding("SILENT_FOCUS", "speech", focus, "focus with no speech", focus["t"]))
     for speech in speeches:
-        if len(ROLE_WORDS.findall(speech["text"])) >= 2:
+        if repeats_role(speech["text"]):
             findings.append(finding("REPEATED_ROLE", "speech", detail=speech["text"], t=speech["t"]))
 
     px_per_dp = density(tree + focuses)

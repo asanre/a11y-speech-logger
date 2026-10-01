@@ -1,9 +1,12 @@
 package io.github.asanre.a11ylogger
 
+import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.os.Build
+import android.provider.Settings
 import android.widget.Toast
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedVisibility
@@ -24,6 +27,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
@@ -53,13 +57,22 @@ data class Setup(
     val packageName: String,
     val focusLogger: String,
     val talkBack: String?,
+    /** Accessibility services enabled right now, as short component names. */
+    val enabledServices: List<String>,
 )
 
+// Fallback when no TalkBack is installed; vendor builds are detected at runtime.
 private const val GOOGLE_TALKBACK = "com.google.android.marvin.talkback/.TalkBackService"
+// Not a public constant, but the action Settings registers for its text-to-speech screen.
+private const val ACTION_TTS_SETTINGS = "com.android.settings.TTS_SETTINGS"
 
 @Composable
 fun HomeScreen(setup: Setup) {
     val talkBack = setup.talkBack ?: GOOGLE_TALKBACK
+    val ours = listOf(talkBack, setup.focusLogger)
+    // Keep whatever else the user has enabled; the setting is a single colon-separated list.
+    val servicesOn = (setup.enabledServices + ours).distinct().joinToString(":")
+    val servicesOff = (setup.enabledServices - ours.toSet()).joinToString(":")
     Surface(Modifier.fillMaxSize()) {
         LazyColumn(
             modifier = Modifier.windowInsetsPadding(WindowInsets.safeDrawing),
@@ -89,12 +102,17 @@ fun HomeScreen(setup: Setup) {
             item {
                 FaqItem(R.string.faq_tts_q) {
                     Paragraph(R.string.faq_tts_a)
+                    SettingsButton(R.string.open_tts_settings, ACTION_TTS_SETTINGS)
+                    Paragraph(R.string.faq_tts_adb)
                     Command("adb shell settings put secure tts_default_synth ${setup.packageName}")
                     Paragraph(R.string.faq_tts_after)
                 }
             }
             item {
-                FaqItem(R.string.faq_service_q) { Paragraph(R.string.faq_service_a) }
+                FaqItem(R.string.faq_service_q) {
+                    Paragraph(R.string.faq_service_a)
+                    SettingsButton(R.string.open_accessibility_settings, Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                }
             }
             item {
                 FaqItem(R.string.faq_talkback_q) {
@@ -107,11 +125,17 @@ fun HomeScreen(setup: Setup) {
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     Paragraph(R.string.faq_talkback_on)
-                    Command("adb shell settings put secure enabled_accessibility_services $talkBack:${setup.focusLogger}")
+                    Command("adb shell settings put secure enabled_accessibility_services $servicesOn")
                     Command("adb shell settings put secure accessibility_enabled 1")
                     Paragraph(R.string.faq_talkback_off)
-                    Command("adb shell settings delete secure enabled_accessibility_services")
-                    Paragraph(R.string.faq_talkback_warning)
+                    Command(
+                        if (servicesOff.isEmpty()) {
+                            "adb shell settings delete secure enabled_accessibility_services"
+                        } else {
+                            "adb shell settings put secure enabled_accessibility_services $servicesOff"
+                        },
+                    )
+                    Paragraph(R.string.faq_talkback_note)
                 }
             }
             item {
@@ -177,6 +201,22 @@ private fun FaqItem(@StringRes question: Int, content: @Composable ColumnScope.(
 }
 
 @Composable
+private fun SettingsButton(@StringRes text: Int, action: String) {
+    val context = LocalContext.current
+    OutlinedButton(
+        onClick = {
+            try {
+                context.startActivity(Intent(action))
+            } catch (_: ActivityNotFoundException) {
+                context.startActivity(Intent(Settings.ACTION_SETTINGS))
+            }
+        },
+    ) {
+        Text(stringResource(text))
+    }
+}
+
+@Composable
 private fun Paragraph(@StringRes text: Int) {
     Text(stringResource(text), style = MaterialTheme.typography.bodyMedium)
 }
@@ -236,7 +276,8 @@ private fun HomeScreenPreview() {
             Setup(
                 packageName = "io.github.asanre.a11ylogger",
                 focusLogger = "io.github.asanre.a11ylogger/.FocusLoggerService",
-                talkBack = "com.samsung.android.accessibility.talkback/com.samsung.android.marvin.talkback.TalkBackService",
+                talkBack = GOOGLE_TALKBACK,
+                enabledServices = emptyList(),
             ),
         )
     }

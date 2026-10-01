@@ -5,6 +5,7 @@ import android.speech.tts.SynthesisCallback
 import android.speech.tts.SynthesisRequest
 import android.speech.tts.TextToSpeech
 import android.speech.tts.TextToSpeechService
+import java.util.Locale
 
 /**
  * Silent TTS engine: logs every utterance as a `[speech]` record and plays nothing.
@@ -12,7 +13,7 @@ import android.speech.tts.TextToSpeechService
  */
 class SpeechLoggerService : TextToSpeechService() {
 
-    private var language = arrayOf("spa", "ESP", "")
+    private var language = deviceLanguage().let { (lang, country) -> arrayOf(lang, country, "") }
 
     override fun onIsLanguageAvailable(lang: String?, country: String?, variant: String?): Int =
         TextToSpeech.LANG_COUNTRY_AVAILABLE
@@ -39,4 +40,10 @@ class SpeechLoggerService : TextToSpeechService() {
         const val SAMPLE_RATE = 16_000
         val SILENCE = ByteArray(SAMPLE_RATE / 100 * 2)
     }
+}
+
+/** The device locale as the ISO 639-2 / ISO 3166 alpha-3 pair TTS engines use, e.g. `eng` + `USA`. */
+internal fun deviceLanguage(): Pair<String, String> {
+    val locale = Locale.getDefault()
+    return runCatching { locale.isO3Language to locale.isO3Country }.getOrDefault("eng" to "USA")
 }

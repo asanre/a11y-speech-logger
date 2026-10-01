@@ -10,7 +10,8 @@ class CheckVoiceDataActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val voices = arrayListOf("spa-ESP", "eng-USA")
+        val (lang, country) = deviceLanguage()
+        val voices = arrayListOf(if (country.isEmpty()) lang else "$lang-$country")
         setResult(
             Engine.CHECK_VOICE_DATA_PASS,
             Intent()
