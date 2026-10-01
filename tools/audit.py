@@ -2,8 +2,9 @@
 """Capture an accessibility session per screen and run deterministic rules over it.
 
   audit.py capture <screen> [--out audits] [--serial SERIAL]
-      Clears logcat, dumps the node tree, takes a screenshot, waits while you walk the
-      screen with TalkBack, then saves session.txt + screen.png and runs `rules`.
+      Clears logcat, dumps the node tree and takes a screenshot (screen-start.png), waits
+      while you walk the screen with TalkBack, dumps and screenshots again (screen-end.png),
+      then saves session.txt and runs `rules`.
 
   audit.py rules <dir>
       Parses <dir>/session.txt and writes <dir>/findings.json.
@@ -17,7 +18,8 @@ import json
 import re
 import subprocess
 import sys
-from collections import defaultdict
+import time
+from collections import Counter, defaultdict
 from pathlib import Path
 
 PACKAGE = "io.github.asanre.a11ylogger"
@@ -30,23 +32,27 @@ LOG_TAG = "A11ySpeech"
 SILENT_FOCUS_MS = 1500
 # An upward jump bigger than this between consecutive focuses suggests a reading-order problem.
 ORDER_JUMP_DP = 48
-SYSTEM_PACKAGES = {"com.android.systemui", "android"}
+# Longer than this, an utterance is a block the user can only stop by interrupting TalkBack.
+LONG_SPEECH_CHARS = 300
 
 SEVERITY = {
     "NO_LABEL": "high",
     "SILENT_FOCUS": "high",
-    "LABEL_IN_CHILD": "medium",
     "EDIT_NO_HINT": "medium",
     "SMALL_TARGET": "medium",
     "NO_HEADING": "medium",
     "DUPLICATE_LABEL": "medium",
+    "ROLE_BEFORE_LABEL": "medium",
+    "LABEL_IN_CHILD": "low",
     "REPEATED_ROLE": "low",
+    "LONG_SPEECH": "low",
     "ORDER_JUMP": "low",
 }
 
 RECORD = re.compile(r"^\[(\w+)\] t=(\d+) ?(.*)$")
 TOKEN = re.compile(r'(\w+)=("(?:[^"\\]|\\.)*"|\S+)|(\S+)')
 BOUNDS = re.compile(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]")
+TREE_DONE = re.compile(r"^\[tree\] t=\d+ (end nodes=|no active window)", re.MULTILINE)
 
 
 # --- parsing -------------------------------------------------------------------------------
@@ -132,13 +138,25 @@ def finding(rule, source, node=None, detail=None, t=None):
     }
 
 
-def repeats_role(utterance):
+def trailing_role(utterance):
     """TalkBack appends the role as the last segment ("…, Button") in the device's language.
-    If that single word already appears earlier ("Add button, Button"), the label repeats the role."""
+    Returns that single word, or None when the utterance doesn't end like that."""
     *rest, last = [part.strip() for part in utterance.split(",")]
-    if not rest or not re.fullmatch(r"\w+", last):
-        return False
-    return re.search(rf"\b{re.escape(last)}\b", ", ".join(rest), re.IGNORECASE) is not None
+    return last if rest and re.fullmatch(r"[^\W\d_]+", last) else None
+
+
+def repeats_role(utterance):
+    """The role word already appears in the label ("Add button, Button")."""
+    role = trailing_role(utterance)
+    rest = utterance.rsplit(",", 1)[0]
+    return role is not None and re.search(rf"\b{re.escape(role)}\b", rest, re.IGNORECASE) is not None
+
+
+def leading_role(utterance, roles):
+    """The utterance starts with a role word that the session shows trailing elsewhere ("Button, Stop"):
+    TalkBack found no name on the node and read a descendant's description as secondary content."""
+    first, *rest = [part.strip() for part in utterance.split(",")]
+    return any(rest) and first.casefold() in roles
 
 
 def build_timeline(focuses, speeches):
@@ -155,12 +173,30 @@ def build_timeline(focuses, speeches):
     return timeline
 
 
+def last_tree(records):
+    """Nodes and package of the last dump: the one taken when the walk ended, on the screen walked."""
+    begins = [i for i, r in enumerate(records) if r["kind"] == "tree" and r.get("marker", "").startswith("begin")]
+    if not begins:
+        return [], None
+    start = begins[-1]
+    nodes = []
+    for r in records[start + 1:]:
+        if r["kind"] == "tree":
+            if "marker" in r:
+                break
+            nodes.append(r)
+    marker = records[start]["marker"]
+    return nodes, marker.split("pkg=", 1)[1] if "pkg=" in marker else None
+
+
 def run_rules(records):
-    tree = [r for r in records if r["kind"] == "tree" and "marker" not in r]
-    tree_pkg = next((r["marker"].split("pkg=", 1)[1] for r in records
-                     if r["kind"] == "tree" and r.get("marker", "").startswith("begin pkg=")), None)
+    tree, tree_pkg = last_tree(records)
     all_focuses = [r for r in records if r["kind"] == "focus"]
-    focuses = [r for r in all_focuses if r.get("pkg") not in SYSTEM_PACKAGES]
+    # The audited app is the dumped one; without a dump, the most focused package. Everything else
+    # (keyboard, system UI) only delimits the timeline.
+    focused_pkgs = Counter(r.get("pkg") for r in all_focuses if r.get("pkg") not in (None, "null"))
+    app_pkg = tree_pkg or next(iter(focused_pkgs.most_common(1)), (None,))[0]
+    focuses = [r for r in all_focuses if r.get("pkg") == app_pkg]
     speeches = [r for r in records if r["kind"] == "speech"]
     findings, seen = [], set()
 
@@ -173,25 +209,34 @@ def run_rules(records):
                     seen.add(key)
                     findings.append(finding(issue, source, node, t=node["t"]))
 
-    # System UI focuses stay in the timeline: they delimit what the app's last focus said.
+    # Other packages' focuses stay in the timeline: they delimit what the app's last focus said.
     timeline = build_timeline(all_focuses, speeches)
+    roles = {role.casefold() for s in speeches if (role := trailing_role(s["text"]))}
     for i, entry in enumerate(timeline):
         focus = entry["focus"]
-        if focus is None or focus.get("pkg") in SYSTEM_PACKAGES:
+        if focus is not None and focus.get("pkg") != app_pkg:
+            continue
+        t = entry["t"]
+        for text in entry["speech"]:
+            if repeats_role(text):
+                findings.append(finding("REPEATED_ROLE", "speech", focus, text, t))
+            if leading_role(text, roles):
+                findings.append(finding("ROLE_BEFORE_LABEL", "speech", focus, text, t))
+            if len(text) > LONG_SPEECH_CHARS:
+                findings.append(finding("LONG_SPEECH", "speech", focus, f"{len(text)} chars: {text[:80]}…", t))
+        if focus is None:
             continue
         next_t = timeline[i + 1]["t"] if i + 1 < len(timeline) else None
         lingered = next_t is None or next_t - focus["t"] >= SILENT_FOCUS_MS
         if lingered and not any(s.strip() for s in entry["speech"]):
             findings.append(finding("SILENT_FOCUS", "speech", focus, "focus with no speech", focus["t"]))
-    for speech in speeches:
-        if repeats_role(speech["text"]):
-            findings.append(finding("REPEATED_ROLE", "speech", detail=speech["text"], t=speech["t"]))
 
     px_per_dp = density(tree + focuses)
     if px_per_dp:
-        for prev, cur in zip(focuses, focuses[1:]):
-            same_pkg = prev.get("pkg") == cur.get("pkg")
-            if same_pkg and isinstance(prev.get("bounds"), list) and isinstance(cur.get("bounds"), list):
+        # Consecutive in the whole sequence: a jump across the keyboard is not a reading-order jump.
+        for prev, cur in zip(all_focuses, all_focuses[1:]):
+            same_app = prev.get("pkg") == cur.get("pkg") == app_pkg
+            if same_app and isinstance(prev.get("bounds"), list) and isinstance(cur.get("bounds"), list):
                 jump_dp = (prev["bounds"][1] - cur["bounds"][1]) / px_per_dp
                 if jump_dp > ORDER_JUMP_DP:
                     findings.append(finding(
@@ -221,7 +266,7 @@ def run_rules(records):
     for f in findings:
         summary[f["rule"]] += 1
     return {
-        "package": tree_pkg,
+        "package": app_pkg,
         "summary": dict(summary),
         "findings": findings,
         "timeline": timeline,
@@ -255,14 +300,30 @@ def output_dir(base, screen):
     return candidate
 
 
+def snapshot(serial, path):
+    adb(serial, "shell", "am", "broadcast", "-a", DUMP_ACTION)
+    path.write_bytes(adb(serial, "exec-out", "screencap", "-p", binary=True))
+
+
+def read_session(serial, dumps):
+    """The dump is logged asynchronously by the service: wait until all of them are in the log."""
+    for _ in range(20):
+        session = adb(serial, "logcat", "-d", "-s", f"{LOG_TAG}:I", "-v", "raw")
+        if len(TREE_DONE.findall(session)) >= dumps:
+            break
+        time.sleep(0.25)
+    return session
+
+
 def capture(args):
     warn_if_not_ready(args.serial)
     folder = output_dir(args.out, args.screen)
     adb(args.serial, "logcat", "-c")
-    adb(args.serial, "shell", "am", "broadcast", "-a", DUMP_ACTION)
-    (folder / "screen.png").write_bytes(adb(args.serial, "exec-out", "screencap", "-p", binary=True))
+    snapshot(args.serial, folder / "screen-start.png")
     input(f"Walk '{args.screen}' with TalkBack, then press Enter to save… ")
-    session = adb(args.serial, "logcat", "-d", "-s", f"{LOG_TAG}:I", "-v", "raw")
+    # Dumped again because the screen can change after the capture starts (a sheet opened, a scroll).
+    snapshot(args.serial, folder / "screen-end.png")
+    session = read_session(args.serial, dumps=2)
     (folder / "session.txt").write_text(session, encoding="utf-8")
     print(f"saved {folder}")
     rules(argparse.Namespace(dir=folder))

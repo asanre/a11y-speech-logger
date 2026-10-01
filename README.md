@@ -53,13 +53,16 @@ adb shell settings delete secure tts_default_synth
 Per screen, with `tools/audit.py` (Python 3 and `adb` only):
 
 ```bash
-python3 tools/audit.py capture checkout   # dumps the tree, screenshots, waits while you walk the screen
+python3 tools/audit.py capture checkout   # dumps the tree, screenshots, waits while you walk the screen, dumps again
 python3 tools/audit.py rules audits/2026-10-01/checkout   # re-run the rules on an existing capture
 ```
 
 `capture` warns you if the engine or the service isn't active. It writes
-`audits/<date>/<screen>/` with `session.txt`, `screen.png` and `findings.json`. `audits/` is
-gitignored because it contains screenshots of the audited app.
+`audits/<date>/<screen>/` with `session.txt`, `screen-start.png`, `screen-end.png` and
+`findings.json`. The tree is dumped at the start and again when you press Enter, because the screen
+can change in between (a sheet opens, a list scrolls). The rules use the last dump, and only the
+focus of the app in that dump: the keyboard and the system UI are left out. `audits/` is gitignored
+because it contains screenshots of the audited app.
 
 Or by hand:
 
@@ -114,13 +117,15 @@ All of them are heuristics to verify, not verdicts.
 | Rule | Where | Severity | Meaning |
 |---|---|---|---|
 | `NO_LABEL` | APK | high | Actionable, with no text, description or children to read from |
-| `LABEL_IN_CHILD` | APK | medium | Actionable without its own label; the only label is the content description of a non-actionable child (an icon button with the description on the icon) |
 | `EDIT_NO_HINT` | APK | medium | Empty `EditText` without a hint, e.g. a placeholder drawn as a separate text |
 | `SMALL_TARGET` | APK | medium | Actionable and smaller than 48dp on one side |
+| `LABEL_IN_CHILD` | APK | low | Actionable without its own label; the only label is the content description of a non-actionable descendant (an icon button with the description on the icon). TalkBack often reads it fine; other services may not |
 | `SILENT_FOCUS` | `audit.py` | high | An element got focus and TalkBack said nothing for 1.5 s |
 | `NO_HEADING` | `audit.py` | medium | No node on the screen is a heading |
 | `DUPLICATE_LABEL` | `audit.py` | medium | Several actionable elements share the same label |
+| `ROLE_BEFORE_LABEL` | `audit.py` | medium | The utterance starts with a role word ("Button, Stop"), one the session shows trailing elsewhere ("Menu, Button"): the node has no name and TalkBack read a descendant's description as secondary content |
 | `REPEATED_ROLE` | `audit.py` | low | The role TalkBack appends ("…, Button", in any language) already appears in the label ("Add button, Button") |
+| `LONG_SPEECH` | `audit.py` | low | One utterance over 300 characters, which the user can only stop by interrupting TalkBack |
 | `ORDER_JUMP` | `audit.py` | low | Focus moved up more than 48dp; could also be a backwards swipe or a scroll |
 
 ## Caveats

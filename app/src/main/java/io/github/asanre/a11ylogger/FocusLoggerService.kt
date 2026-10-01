@@ -117,15 +117,22 @@ class FocusLoggerService : AccessibilityService() {
     }
 
     /**
-     * The label sits on a non-actionable child that has only a content description, the shape of an
-     * icon button whose description is on the icon. Children with text are left out: a clickable row
-     * of text views is the normal View pattern and TalkBack reads it fine.
+     * The label sits on a non-actionable descendant that has only a content description, the shape of
+     * an icon button whose description is on the icon, however deep the icon is wrapped. Descendants
+     * with text are left out: a clickable row of text views is the normal View pattern and TalkBack
+     * reads it fine.
      */
     private fun AccessibilityNodeInfo.hasLabelOnlyInIconChild(): Boolean {
-        val children = (0 until childCount).mapNotNull(::getChild)
-        return children.none { !it.text.isNullOrBlank() } &&
-            children.any { !it.contentDescription.isNullOrBlank() && !it.isClickable }
+        val inner = innerDescendants().toList()
+        return inner.none { !it.text.isNullOrBlank() } && inner.any { !it.contentDescription.isNullOrBlank() }
     }
+
+    /** Descendants down to, not into, nested actionable nodes: those are controls of their own. */
+    private fun AccessibilityNodeInfo.innerDescendants(): Sequence<AccessibilityNodeInfo> =
+        (0 until childCount).asSequence()
+            .mapNotNull(::getChild)
+            .filterNot { it.isClickable || it.isLongClickable }
+            .flatMap { sequenceOf(it) + it.innerDescendants() }
 
     private fun AccessibilityNodeInfo.stateDescriptionOrNull(): CharSequence? =
         if (Build.VERSION.SDK_INT >= 30) stateDescription else null
