@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Speech bubble with the accessibility figure, inside the 66dp adaptive-icon safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M36,30H72A8,8 0 0 1 80,38V64A8,8 0 0 1 72,72H50L38,82V72H36A8,8 0 0 1 28,64V38A8,8 0 0 1 36,30Z" />
+    <path
+        android:fillColor="#0B57D0"
+        android:pathData="M54,35A4,4 0 1 1 54,43A4,4 0 1 1 54,35Z" />
+    <path
+        android:fillColor="#0B57D0"
+        android:pathData="M40,46H68V50H58V57L63,67L59.5,68.5L54,59L48.5,68.5L45,67L50,57V50H40Z" />
+</vector>

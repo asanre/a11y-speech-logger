@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">A11y Speech Logger</string>
+    <string name="focus_logger_label">A11y Focus Logger</string>
+    <string name="focus_logger_description">Logs accessibility focus, window changes and announcements under the A11ySpeech logcat tag, and dumps the screen\'s node tree on request.</string>
+
+    <string name="intro_title">Read what TalkBack says</string>
+    <string name="intro_body">A11y Speech Logger writes to logcat exactly what TalkBack says and which element it is talking about, so a person or an LLM can audit an app\'s accessibility from text. Set it up once with the steps below, then capture sessions from your computer.</string>
+    <string name="faq_title">FAQ</string>
+    <string name="copy">Copy</string>
+    <string name="copy_command">copy command</string>
+    <string name="copied">Copied</string>
+    <string name="expand">expand</string>
+    <string name="collapse">collapse</string>
+    <string name="expanded">Expanded</string>
+    <string name="collapsed">Collapsed</string>
+
+    <string name="faq_what_q">What does it capture?</string>
+    <string name="faq_what_a">Two components write to the A11ySpeech logcat tag, one record per line: [kind] t=&lt;ms&gt; &lt;fields&gt;.\n\n• A silent text-to-speech engine logs every utterance as [speech]. While it is the default engine, TalkBack is silent on the whole device.\n• The A11y Focus Logger accessibility service logs the focused element as [focus] (id, class, text, role, state, size and heuristic issues such as NO_LABEL or SMALL_TARGET), plus [window] changes, [announce] announcements and [tree] node-tree dumps on request.</string>
+
+    <string name="faq_tts_q">How do I enable the speech logger?</string>
+    <string name="faq_tts_a">Make A11y Speech Logger the preferred text-to-speech engine in Settings → Accessibility → Text-to-speech output (on Samsung: General management → Text-to-speech) → Preferred engine. Or run this from a computer:</string>
+    <string name="faq_tts_after">Then turn TalkBack off and on again so it picks up the engine.</string>
+
+    <string name="faq_service_q">How do I enable the A11y Focus Logger?</string>
+    <string name="faq_service_a">Settings → Accessibility → Installed apps (on Samsung: Installed apps/services) → A11y Focus Logger → On. Leave its shortcut off: on some Samsung devices enabling the shortcut turns TalkBack off. To do it from a computer, see the next question.</string>
+
+    <string name="faq_talkback_q">How do I turn TalkBack on or off from adb?</string>
+    <string name="faq_talkback_detected">TalkBack on this device: %1$s</string>
+    <string name="faq_talkback_not_found">TalkBack was not found on this device, so the commands use Google\'s TalkBack.</string>
+    <string name="faq_talkback_on">Turn TalkBack and the A11y Focus Logger on:</string>
+    <string name="faq_talkback_off">Turn every accessibility service off:</string>
+    <string name="faq_talkback_warning">These commands replace the whole list of enabled accessibility services, so any other service you had on is turned off.</string>
+
+    <string name="faq_capture_q">How do I capture a session?</string>
+    <string name="faq_capture_clear">1. Clear the log:</string>
+    <string name="faq_capture_dump">2. Navigate with TalkBack. Optionally snapshot the current screen\'s node tree:</string>
+    <string name="faq_capture_save">3. Save the session:</string>
+    <string name="faq_capture_tool">The repository\'s tools/audit.py does these steps per screen, takes a screenshot and runs automatic rules.</string>
+
+    <string name="faq_restore_q">How do I restore everything?</string>
+    <string name="faq_restore_tts">Pick your previous engine as preferred again, or reset the default engine:</string>
+    <string name="faq_restore_service">Then turn the A11y Focus Logger off in accessibility settings, or uninstall the app:</string>
+</resources>
