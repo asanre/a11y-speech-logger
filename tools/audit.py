@@ -36,19 +36,39 @@ ORDER_JUMP_DP = 48
 # Longer than this, an utterance is a block the user can only stop by interrupting TalkBack.
 LONG_SPEECH_CHARS = 300
 
-SEVERITY = {
-    "NO_LABEL": "high",
-    "SILENT_FOCUS": "high",
-    "EDIT_NO_HINT": "medium",
-    "SMALL_TARGET": "medium",
-    "NO_HEADING": "medium",
-    "DUPLICATE_LABEL": "medium",
-    "ROLE_BEFORE_LABEL": "medium",
-    "LABEL_IN_CHILD": "low",
-    "REPEATED_ROLE": "low",
-    "LONG_SPEECH": "low",
-    "ORDER_JUMP": "low",
+# The WCAG 2.2 success criteria the rules refer to: number -> (name, level).
+WCAG = {
+    "1.1.1": ("Non-text Content", "A"),
+    "1.3.1": ("Info and Relationships", "A"),
+    "1.3.2": ("Meaningful Sequence", "A"),
+    "2.4.3": ("Focus Order", "A"),
+    "2.4.4": ("Link Purpose (In Context)", "A"),
+    "2.4.6": ("Headings and Labels", "AA"),
+    "2.5.3": ("Label in Name", "A"),
+    "2.5.8": ("Target Size (Minimum)", "AA"),
+    "3.3.2": ("Labels or Instructions", "A"),
+    "4.1.2": ("Name, Role, Value", "A"),
 }
+
+# conformance: "failure" breaks the criterion as written; "advisory" is a platform guideline, a best
+# practice or a hint that needs checking. Criteria are empty when the rule is best practice only.
+RULES = {
+    "NO_LABEL": {"severity": "high", "wcag": ["4.1.2", "1.1.1"], "conformance": "failure"},
+    "SILENT_FOCUS": {"severity": "high", "wcag": ["4.1.2"], "conformance": "failure"},
+    "EDIT_NO_HINT": {"severity": "medium", "wcag": ["3.3.2", "4.1.2"], "conformance": "failure"},
+    # Advisory between 24dp and 48dp (Android's guideline), a failure below 24dp: see target_conformance.
+    "SMALL_TARGET": {"severity": "medium", "wcag": ["2.5.8"], "conformance": "advisory"},
+    "NO_HEADING": {"severity": "medium", "wcag": ["1.3.1", "2.4.6"], "conformance": "advisory"},
+    "DUPLICATE_LABEL": {"severity": "medium", "wcag": ["2.4.6", "2.4.4"], "conformance": "advisory"},
+    "ROLE_BEFORE_LABEL": {"severity": "medium", "wcag": ["4.1.2", "2.5.3"], "conformance": "advisory"},
+    "LABEL_IN_CHILD": {"severity": "low", "wcag": ["4.1.2"], "conformance": "advisory"},
+    "REPEATED_ROLE": {"severity": "low", "wcag": [], "conformance": "advisory"},
+    "LONG_SPEECH": {"severity": "low", "wcag": [], "conformance": "advisory"},
+    "ORDER_JUMP": {"severity": "low", "wcag": ["1.3.2", "2.4.3"], "conformance": "advisory"},
+}
+
+# WCAG 2.5.8 asks for 24x24 CSS px; Android's guideline is 48dp. One dp is one CSS px.
+WCAG_TARGET_DP = 24
 
 RECORD = re.compile(r"^\[(\w+)\] t=(\d+) ?(.*)$")
 TOKEN = re.compile(r'(\w+)=("(?:[^"\\]|\\.)*"|\S+)|(\S+)')
@@ -130,15 +150,23 @@ def density(nodes):
     return None
 
 
-def finding(rule, source, node=None, detail=None, t=None):
+def finding(rule, source, node=None, detail=None, t=None, conformance=None):
     return {
         "rule": rule,
-        "severity": SEVERITY[rule],
+        "severity": RULES[rule]["severity"],
+        "wcag": RULES[rule]["wcag"],
+        "conformance": conformance or RULES[rule]["conformance"],
         "source": source,
         "t": t,
         "node": {k: node[k] for k in ("id", "class", "text", "desc", "bounds", "size") if k in node} if node else None,
         "detail": detail,
     }
+
+
+def target_conformance(node):
+    """Below 24dp on one side fails WCAG 2.5.8; between 24dp and 48dp only misses Android's guideline."""
+    m = re.fullmatch(r"(\d+)x(\d+)dp", node.get("size", ""))
+    return "failure" if m and min(int(m.group(1)), int(m.group(2))) < WCAG_TARGET_DP else "advisory"
 
 
 def trailing_role(utterance):
@@ -208,9 +236,10 @@ def run_rules(records):
         for node in nodes:
             for issue in node["issues"]:
                 key = (issue, node.get("id"), str(node.get("bounds")))
-                if issue in SEVERITY and key not in seen:
+                if issue in RULES and key not in seen:
                     seen.add(key)
-                    findings.append(finding(issue, source, node, t=node["t"]))
+                    conformance = target_conformance(node) if issue == "SMALL_TARGET" else None
+                    findings.append(finding(issue, source, node, t=node["t"], conformance=conformance))
 
     # Other packages' focuses stay in the timeline: they delimit what the app's last focus said.
     timeline = build_timeline(all_focuses, speeches)
@@ -264,13 +293,19 @@ def run_rules(records):
                 f"{len(nodes_with_label)} actionable elements share this label",
             ))
 
-    findings.sort(key=lambda f: ("high", "medium", "low").index(f["severity"]))
+    findings.sort(key=lambda f: (("high", "medium", "low").index(f["severity"]), f["conformance"] != "failure"))
     summary = defaultdict(int)
+    by_wcag = defaultdict(lambda: {"failure": 0, "advisory": 0})
     for f in findings:
         summary[f["rule"]] += 1
+        for criterion in f["wcag"]:
+            by_wcag[criterion][f["conformance"]] += 1
     return {
         "package": app_pkg,
         "summary": dict(summary),
+        "summary_by_wcag": {
+            c: {"name": WCAG[c][0], "level": WCAG[c][1], **counts} for c, counts in sorted(by_wcag.items())
+        },
         "findings": findings,
         "timeline": timeline,
         "tree": tree,
