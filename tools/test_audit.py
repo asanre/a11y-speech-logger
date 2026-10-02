@@ -1,7 +1,9 @@
 """Rules over hand-written session lines. Run with `python3 -m unittest tools/test_audit.py`."""
 
 import sys
+import tempfile
 import unittest
+import zlib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -207,6 +209,66 @@ class StructureTest(unittest.TestCase):
 
     def test_spoken_without_the_sender_prefix(self):
         self.assertTrue(audit.was_spoken("Bot: Here are the delivery options", audit.normalized("Here are the delivery options")))
+
+
+def write_png(path, pixels):
+    """RGBA PNG with each row using the next of the five filters, to exercise every decoding path."""
+    width, channels = len(pixels[0]), 4
+    raw, prev = bytearray(), bytes(width * channels)
+    for y, row in enumerate(pixels):
+        line = bytes(v for rgb in row for v in (*rgb, 255))
+        kind, out = y % 5, bytearray()
+        for i, v in enumerate(line):
+            a = line[i - channels] if i >= channels else 0
+            b, c = prev[i], prev[i - channels] if i >= channels else 0
+            pa, pb, pc = abs(b - c), abs(a - c), abs(a + b - 2 * c)
+            predictor = (0, a, b, (a + b) >> 1, a if pa <= pb and pa <= pc else b if pb <= pc else c)[kind]
+            out.append((v - predictor) & 0xFF)
+        raw += bytes([kind]) + out
+        prev = line
+
+    def chunk(kind, body):
+        return len(body).to_bytes(4, "big") + kind + body + zlib.crc32(kind + body).to_bytes(4, "big")
+
+    header = width.to_bytes(4, "big") + len(pixels).to_bytes(4, "big") + bytes([8, 6, 0, 0, 0])
+    Path(path).write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(bytes(raw))) + chunk(b"IEND", b""))
+
+
+def text_block(background, text, width=40, height=20):
+    """A background with a horizontal bar of text color in the middle."""
+    return [[text if 8 <= y < 12 and 4 <= x < 36 else background for x in range(width)] for y in range(height)]
+
+
+class ContrastTest(unittest.TestCase):
+
+    def test_png_round_trip_through_every_filter(self):
+        pixels = [[((x * 37 + y) % 256, (y * 11) % 256, (x * y) % 256) for x in range(13)] for y in range(10)]
+        with tempfile.TemporaryDirectory() as folder:
+            write_png(Path(folder) / "s.png", pixels)
+            _, _, decoded = audit.read_png(Path(folder) / "s.png")
+        self.assertEqual(decoded, pixels)
+
+    def run_with_screenshot(self, pixels):
+        with tempfile.TemporaryDirectory() as folder:
+            write_png(Path(folder) / "screen-end.png", pixels)
+            lines = tree((1, "id=a class=TextView text=\"Sale\" heading bounds=[0,0][40,20] size=20x10dp"), window="Shop")
+            records = [audit.parse_record(line) for line in lines]
+            return audit.run_rules(records, Path(folder) / "screen-end.png")
+
+    def test_light_grey_on_white_fails(self):
+        [f] = rules(self.run_with_screenshot(text_block((255, 255, 255), (200, 200, 200))), "TEXT_CONTRAST")
+        self.assertEqual(f["conformance"], "failure")
+
+    def test_mid_grey_on_white_passes_only_if_large(self):
+        [f] = rules(self.run_with_screenshot(text_block((255, 255, 255), (130, 130, 130))), "TEXT_CONTRAST")
+        self.assertEqual(f["conformance"], "advisory")
+
+    def test_black_on_white_passes(self):
+        self.assertEqual(rules(self.run_with_screenshot(text_block((255, 255, 255), (0, 0, 0))), "TEXT_CONTRAST"), [])
+
+    def test_wcag_reference_ratios(self):
+        self.assertAlmostEqual(audit.contrast_ratio((0, 0, 0), (255, 255, 255)), 21, places=1)
+        self.assertAlmostEqual(audit.contrast_ratio((118, 118, 118), (255, 255, 255)), 4.54, places=2)
 
 
 if __name__ == "__main__":

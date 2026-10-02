@@ -20,6 +20,7 @@ import subprocess
 import sys
 import threading
 import time
+import zlib
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -41,6 +42,7 @@ WCAG = {
     "1.1.1": ("Non-text Content", "A"),
     "1.3.1": ("Info and Relationships", "A"),
     "1.3.2": ("Meaningful Sequence", "A"),
+    "1.4.3": ("Contrast (Minimum)", "AA"),
     "2.4.2": ("Page Titled", "A"),
     "2.4.3": ("Focus Order", "A"),
     "2.4.4": ("Link Purpose (In Context)", "A"),
@@ -73,6 +75,8 @@ RULES = {
     "LIST_SEMANTICS": {"severity": "medium", "wcag": ["1.3.1"], "conformance": "advisory"},
     "SCREEN_TITLE": {"severity": "medium", "wcag": ["2.4.2"], "conformance": "failure"},
     "FOCUS_MOVED_AFTER_ACTION": {"severity": "medium", "wcag": ["2.4.3"], "conformance": "advisory"},
+    # A failure below 3:1, which no text size passes; advisory up to 4.5:1, which large text passes.
+    "TEXT_CONTRAST": {"severity": "medium", "wcag": ["1.4.3"], "conformance": "failure"},
 }
 
 # Classes a clickable node gets when nothing sets its role: Compose's default, plain Views and layouts.
@@ -84,6 +88,11 @@ TOP_LEVEL_DOMAINS = {"com", "org", "net", "io", "dev", "app", "edu", "gov", "co"
 
 # Focus that moves this soon after an activation was moved by the app, not by a swipe.
 FOCUS_AFTER_ACTION_MS = 1000
+
+# WCAG 1.4.3: 4.5:1 for text, 3:1 for large text (18pt, or 14pt bold).
+CONTRAST_TEXT, CONTRAST_LARGE_TEXT = 4.5, 3.0
+# Below this share of the node's pixels the background is an image or a gradient: contrast is not measured.
+UNIFORM_BACKGROUND = 0.4
 
 # WCAG 2.5.8 asks for 24x24 CSS px; Android's guideline is 48dp. One dp is one CSS px.
 WCAG_TARGET_DP = 24
@@ -347,7 +356,8 @@ def focus_moves_after_action(records, app_pkg):
                 break
 
 
-def run_rules(records):
+def run_rules(records, screenshot=None):
+    """`screenshot` is a PNG taken when the last dump was, for contrast."""
     all_dumps = dumps(records)
     first_dump, last_dump = (all_dumps[0], all_dumps[-1]) if all_dumps else (({}, []), ({}, []))
     tree, tree_pkg = last_dump[1], last_dump[0].get("pkg")
@@ -481,6 +491,9 @@ def run_rules(records):
         if label(n) and label(n) not in before and label(n) not in focused and not was_spoken(label(n), spoken)
     }) if first_dump is not last_dump else []
 
+    if screenshot:
+        findings.extend(contrast_findings(tree, screenshot))
+
     nodes = tree or focuses
     if nodes and not any("heading" in n["flags"] for n in nodes):
         findings.append(finding("NO_HEADING", "tree" if tree else "focus", detail="no node marked as heading"))
@@ -515,6 +528,103 @@ def run_rules(records):
         "timeline": timeline,
         "tree": tree,
     }
+
+
+# --- contrast ------------------------------------------------------------------------------
+
+def read_png(path):
+    """(width, height, rows of RGB tuples) of an 8-bit, non-interlaced RGB or RGBA PNG, as screencap writes."""
+    data = Path(path).read_bytes()
+    pos, chunks, header = 8, [], None
+    while pos < len(data):
+        length = int.from_bytes(data[pos:pos + 4], "big")
+        kind, body = data[pos + 4:pos + 8], data[pos + 8:pos + 8 + length]
+        if kind == b"IHDR":
+            header = body
+        elif kind == b"IDAT":
+            chunks.append(body)
+        pos += 12 + length
+    width, height = int.from_bytes(header[0:4], "big"), int.from_bytes(header[4:8], "big")
+    depth, color, interlace = header[8], header[9], header[12]
+    if depth != 8 or color not in (2, 6) or interlace:
+        raise ValueError("only 8-bit non-interlaced RGB/RGBA PNGs are supported")
+    channels = 4 if color == 6 else 3
+    raw, stride = zlib.decompress(b"".join(chunks)), width * channels
+    rows, prev = [], bytearray(stride)
+    for y in range(height):
+        start = y * (stride + 1)
+        kind, line = raw[start], bytearray(raw[start + 1:start + 1 + stride])
+        if kind == 1:
+            for i in range(channels, stride):
+                line[i] = (line[i] + line[i - channels]) & 0xFF
+        elif kind == 2:
+            line = bytearray((a + b) & 0xFF for a, b in zip(line, prev))
+        elif kind == 3:
+            for i in range(stride):
+                left = line[i - channels] if i >= channels else 0
+                line[i] = (line[i] + ((left + prev[i]) >> 1)) & 0xFF
+        elif kind == 4:
+            for i in range(stride):
+                a = line[i - channels] if i >= channels else 0
+                b, c = prev[i], prev[i - channels] if i >= channels else 0
+                pa, pb, pc = abs(b - c), abs(a - c), abs(a + b - 2 * c)
+                line[i] = (line[i] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 0xFF
+        rows.append(line)
+        prev = line
+    return width, height, [[tuple(row[x:x + 3]) for x in range(0, stride, channels)] for row in rows]
+
+
+def luminance(rgb):
+    def channel(v):
+        v /= 255
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+    r, g, b = (channel(v) for v in rgb)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def contrast_ratio(a, b):
+    la, lb = sorted((luminance(a), luminance(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+def text_contrast(pixels, bounds):
+    """(background, foreground, ratio) inside the bounds, or None when the background is not uniform.
+    The background is the most frequent color; the text is, among the next most frequent, the one that
+    contrasts most with it (anti-aliasing leaves in-between colors)."""
+    left, top, right, bottom = bounds
+    top, bottom = max(top, 0), min(bottom, len(pixels))
+    left, right = max(left, 0), min(right, len(pixels[0]) if pixels else 0)
+    if right - left < 4 or bottom - top < 4:
+        return None
+    step = 2 if (right - left) * (bottom - top) > 40000 else 1
+    exact = Counter(pixels[y][x] for y in range(top, bottom, step) for x in range(left, right, step))
+    # Near colors are counted together; each group is measured by its most frequent exact color.
+    groups, representative = Counter(), {}
+    for color, n in exact.most_common():
+        key = tuple(v >> 3 for v in color)
+        groups[key] += n
+        representative.setdefault(key, color)
+    (key, n), *others = groups.most_common(4)
+    if n < UNIFORM_BACKGROUND * sum(groups.values()) or not others:
+        return None
+    background = representative[key]
+    foreground = max((representative[k] for k, _ in others), key=lambda color: contrast_ratio(color, background))
+    return background, foreground, contrast_ratio(foreground, background)
+
+
+def contrast_findings(tree, screenshot):
+    _, _, pixels = read_png(screenshot)
+    for node in tree:
+        if not node.get("text", "").strip() or not isinstance(node.get("bounds"), list):
+            continue
+        measured = text_contrast(pixels, node["bounds"])
+        if measured and measured[2] < CONTRAST_TEXT:
+            background, foreground, ratio = measured
+            conformance = "failure" if ratio < CONTRAST_LARGE_TEXT else "advisory"
+            detail = f"{ratio:.1f}:1, text #{bytes(foreground).hex()} on #{bytes(background).hex()}"
+            if conformance == "advisory":
+                detail += "; passes only if the text is large (18sp, or 14sp bold)"
+            yield finding("TEXT_CONTRAST", "screenshot", node, detail, node["t"], conformance=conformance)
 
 
 # --- commands ------------------------------------------------------------------------------
@@ -614,7 +724,12 @@ def capture(args):
 
 def rules(args):
     folder = Path(args.dir)
-    result = run_rules(parse_session(folder / "session.txt"))
+    records = parse_session(folder / "session.txt")
+    # screen-end.png matches the last dump; older captures have one screen.png, matching a single dump.
+    screenshot = folder / "screen-end.png"
+    if not screenshot.exists() and len(dumps(records)) == 1 and (folder / "screen.png").exists():
+        screenshot = folder / "screen.png"
+    result = run_rules(records, screenshot if screenshot.exists() else None)
     (folder / "findings.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     counts = ", ".join(f"{rule}={n}" for rule, n in result["summary"].items()) or "none"
     print(f"findings: {counts} -> {folder / 'findings.json'}")
