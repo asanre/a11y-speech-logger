@@ -70,5 +70,75 @@ class ConformanceTest(unittest.TestCase):
                 self.assertIn(criterion, audit.WCAG, name)
 
 
+class NodeRulesTest(unittest.TestCase):
+
+    def test_clickable_without_role_is_flagged(self):
+        result = run(*tree((1, "id=card class=View clickable bounds=[0,0][96,96] size=48x48dp")))
+        [f] = rules(result, "NO_ROLE")
+        self.assertEqual(f["node"]["id"], "card")
+        self.assertEqual(f["conformance"], "failure")
+
+    def test_role_on_a_role_only_child_is_advisory(self):
+        result = run(*tree(
+            (1, "id=card class=View clickable bounds=[0,0][96,96] size=48x48dp"),
+            (2, "id=- class=Button bounds=[0,0][96,96] size=48x48dp"),
+        ))
+        [f] = rules(result, "NO_ROLE")
+        self.assertEqual(f["conformance"], "advisory")
+
+    def test_role_read_as_content_is_advisory(self):
+        result = run(
+            f"[focus] t=10 pkg={PKG} id=stop class=View clickable bounds=[0,0][96,96] size=48x48dp",
+            "[speech] t=11 Button, Stop",
+            f"[focus] t=5000 pkg={PKG} id=menu class=Button text=\"Menu\" clickable bounds=[0,100][96,196] size=48x48dp",
+            "[speech] t=5001 Menu, Button",
+        )
+        [f] = rules(result, "NO_ROLE")
+        self.assertEqual(f["conformance"], "advisory")
+        self.assertIn("'Button'", f["detail"])
+
+    def test_button_or_role_description_has_a_role(self):
+        result = run(*tree(
+            (1, "id=a class=Button text=\"Go\" clickable bounds=[0,0][96,96] size=48x48dp"),
+            (1, "id=b class=View text=\"Shoes\" role=\"Tab\" clickable bounds=[0,0][96,96] size=48x48dp"),
+        ))
+        self.assertEqual(rules(result, "NO_ROLE"), [])
+
+    def test_checkable_and_selected_conflict(self):
+        result = run(*tree((1, "id=tab class=View text=\"Women\" role=\"Tab\" checked=true selected clickable bounds=[0,0][96,96] size=48x48dp")))
+        self.assertEqual(len(rules(result, "CONFLICTING_STATE")), 1)
+
+    def test_selected_alone_does_not_conflict(self):
+        result = run(*tree((1, "id=tab class=View text=\"Women\" role=\"Tab\" selected clickable bounds=[0,0][96,96] size=48x48dp")))
+        self.assertEqual(rules(result, "CONFLICTING_STATE"), [])
+
+    def test_clickable_inside_clickable_is_nested(self):
+        result = run(*tree(
+            (1, "id=card class=Button clickable bounds=[0,0][400,400] size=200x200dp"),
+            (3, "id=add class=Button desc=\"Add\" clickable bounds=[300,300][396,396] size=48x48dp"),
+            (1, "id=next class=Button text=\"Next\" clickable bounds=[0,500][96,596] size=48x48dp"),
+        ))
+        [f] = rules(result, "NESTED_ACTIONABLE")
+        self.assertEqual(f["node"]["id"], "card")
+        self.assertIn("'Add'", f["detail"])
+
+
+class RawTextTest(unittest.TestCase):
+
+    def test_resource_key_spoken(self):
+        result = run(f"[focus] t=10 pkg={PKG} id=a class=View bounds=[0,0][96,96] size=48x48dp", "[speech] t=11 accessibility.loading.text")
+        self.assertEqual(len(rules(result, "RAW_TEXT_SPOKEN")), 1)
+
+    def test_html_in_tree_text(self):
+        result = run(*tree((1, "id=a class=TextView text=\"Hello<br>world\" bounds=[0,0][96,96] size=48x48dp")))
+        [f] = rules(result, "RAW_TEXT_SPOKEN")
+        self.assertIn("<br>", f["detail"])
+
+    def test_domains_and_prices_are_not_raw(self):
+        self.assertIsNone(audit.raw_text("Visit shop.example.com today"))
+        self.assertIsNone(audit.raw_text("Price 1.299,99 €"))
+        self.assertIsNone(audit.raw_text("Rock & roll"))
+
+
 if __name__ == "__main__":
     unittest.main()

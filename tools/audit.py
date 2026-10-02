@@ -65,7 +65,18 @@ RULES = {
     "REPEATED_ROLE": {"severity": "low", "wcag": [], "conformance": "advisory"},
     "LONG_SPEECH": {"severity": "low", "wcag": [], "conformance": "advisory"},
     "ORDER_JUMP": {"severity": "low", "wcag": ["1.3.2", "2.4.3"], "conformance": "advisory"},
+    "NO_ROLE": {"severity": "medium", "wcag": ["4.1.2"], "conformance": "failure"},
+    "CONFLICTING_STATE": {"severity": "medium", "wcag": ["4.1.2"], "conformance": "failure"},
+    "RAW_TEXT_SPOKEN": {"severity": "high", "wcag": ["1.1.1", "4.1.2"], "conformance": "failure"},
+    "NESTED_ACTIONABLE": {"severity": "medium", "wcag": ["4.1.2", "2.4.3"], "conformance": "advisory"},
 }
+
+# Classes a clickable node gets when nothing sets its role: Compose's default, plain Views and layouts.
+GENERIC_CLASSES = {"View", "ViewGroup", "TextView", "ImageView"}
+# Markup or a resource key read out instead of text: `<br>`, `&nbsp;`, `accessibility.loading.text`.
+RAW_MARKUP = re.compile(r"</?[A-Za-z][^>]*>|&(?:nbsp|amp|lt|gt|quot|apos|#\d+);")
+RESOURCE_KEY = re.compile(r"\b[a-z][a-z0-9_]*(?:\.[a-z0-9_]+){2,}\b")
+TOP_LEVEL_DOMAINS = {"com", "org", "net", "io", "dev", "app", "edu", "gov", "co", "uk", "es", "de", "fr", "it"}
 
 # WCAG 2.5.8 asks for 24x24 CSS px; Android's guideline is 48dp. One dp is one CSS px.
 WCAG_TARGET_DP = 24
@@ -169,6 +180,11 @@ def target_conformance(node):
     return "failure" if m and min(int(m.group(1)), int(m.group(2))) < WCAG_TARGET_DP else "advisory"
 
 
+def element_key(node):
+    """The same element across dumps and focuses: its id, or its bounds when it has none."""
+    return node.get("id") if node.get("id") not in (None, "-") else str(node.get("bounds"))
+
+
 def trailing_role(utterance):
     """TalkBack appends the role as the last segment ("…, Button") in the device's language.
     Returns that single word, or None when the utterance doesn't end like that."""
@@ -188,6 +204,60 @@ def leading_role(utterance, roles):
     TalkBack found no name on the node and read a descendant's description as secondary content."""
     first, *rest = [part.strip() for part in utterance.split(",")]
     return any(rest) and first.casefold() in roles
+
+
+def lacks_role(node):
+    cls = node.get("class") or ""
+    return "clickable" in node["flags"] and "role" not in node and (cls in GENERIC_CLASSES or cls.endswith("Layout"))
+
+
+def has_conflicting_state(node):
+    """Checkable and selected at once: TalkBack reads both, e.g. a tab built on a toggle ("checked, selected")."""
+    return "checked" in node and "selected" in node["flags"]
+
+
+def raw_text(text):
+    """The markup or resource key found in the text, or None."""
+    if m := RAW_MARKUP.search(text):
+        return m.group(0)
+    for m in RESOURCE_KEY.finditer(text):
+        if m.group(0).rsplit(".", 1)[1] not in TOP_LEVEL_DOMAINS:
+            return m.group(0)
+    return None
+
+
+def descendants(tree, i):
+    """The nodes dumped inside tree[i], in tree order."""
+    for other in tree[i + 1:]:
+        if other["depth"] <= tree[i]["depth"]:
+            break
+        yield other
+
+
+def nested_actionables(tree):
+    """Each clickable node with the clickable nodes inside it: the inner ones are controls of their own."""
+    for i, node in enumerate(tree):
+        if "clickable" in node["flags"]:
+            inner = [other for other in descendants(tree, i) if "clickable" in other["flags"]]
+            if inner:
+                yield node, inner
+
+
+def role_in_descendant(tree, node, speech, roles):
+    """Where the role of a clickable node without one lives, or None if nowhere.
+
+    A Compose node that has children of its own keeps the role out of its class and puts it on a child
+    node that only carries the role; TalkBack reads that child as content ("Button, Stop")."""
+    if node in tree:
+        i = tree.index(node)
+        for other in descendants(tree, i):
+            if "clickable" not in other["flags"] and (other.get("role") or other.get("class") not in GENERIC_CLASSES):
+                return other.get("role") or other.get("class")
+    for text in reversed(speech):
+        for part in text.split(","):
+            if part.strip().casefold() in roles:
+                return part.strip()
+    return None
 
 
 def build_timeline(focuses, speeches):
@@ -241,6 +311,22 @@ def run_rules(records):
                     conformance = target_conformance(node) if issue == "SMALL_TARGET" else None
                     findings.append(finding(issue, source, node, t=node["t"], conformance=conformance))
 
+    # Node rules over the fields already logged, so they also run on older captures.
+    for source, nodes in (("tree", tree), ("focus", focuses)):
+        for node in nodes:
+            key = ("CONFLICTING_STATE", node.get("id"), str(node.get("bounds")))
+            if has_conflicting_state(node) and key not in seen:
+                seen.add(key)
+                findings.append(finding("CONFLICTING_STATE", source, node, t=node["t"]))
+    for node in tree:
+        for value in (node.get("text"), node.get("desc")):
+            if value and (raw := raw_text(value)) and ("RAW_TEXT_SPOKEN", value) not in seen:
+                seen.add(("RAW_TEXT_SPOKEN", value))
+                findings.append(finding("RAW_TEXT_SPOKEN", "tree", node, f"{raw!r} in {value[:80]!r}", node["t"]))
+    for node, inner in nested_actionables(tree):
+        names = ", ".join(repr(label(n) or n.get("id")) for n in inner)
+        findings.append(finding("NESTED_ACTIONABLE", "tree", node, f"{len(inner)} clickable inside: {names}", node["t"]))
+
     # Other packages' focuses stay in the timeline: they delimit what the app's last focus said.
     timeline = build_timeline(all_focuses, speeches)
     roles = {role.casefold() for s in speeches if (role := trailing_role(s["text"]))}
@@ -254,6 +340,9 @@ def run_rules(records):
                 findings.append(finding("REPEATED_ROLE", "speech", focus, text, t))
             if leading_role(text, roles):
                 findings.append(finding("ROLE_BEFORE_LABEL", "speech", focus, text, t))
+            if (raw := raw_text(text)) and ("RAW_TEXT_SPOKEN", text) not in seen:
+                seen.add(("RAW_TEXT_SPOKEN", text))
+                findings.append(finding("RAW_TEXT_SPOKEN", "speech", focus, f"{raw!r} in {text[:80]!r}", t))
             if len(text) > LONG_SPEECH_CHARS:
                 findings.append(finding("LONG_SPEECH", "speech", focus, f"{len(text)} chars: {text[:80]}…", t))
         if focus is None:
@@ -262,6 +351,29 @@ def run_rules(records):
         lingered = next_t is None or next_t - focus["t"] >= SILENT_FOCUS_MS
         if lingered and not any(s.strip() for s in entry["speech"]):
             findings.append(finding("SILENT_FOCUS", "speech", focus, "focus with no speech", focus["t"]))
+
+    # A focus owns what TalkBack said for it; a tree node owns the speech of a focus on the same element.
+    speech_by_element = defaultdict(list)
+    for entry in timeline:
+        if entry["focus"] is not None:
+            speech_by_element[element_key(entry["focus"])] += entry["speech"]
+    # Any trailing segment of a few words can be a role ("Button", "Drop-down list") when it is read as content.
+    role_phrases = roles | {
+        last.strip().casefold() for s in speeches if "," in s["text"]
+        for last in [s["text"].rsplit(",", 1)[1]] if re.fullmatch(r"[^\W\d_]+(?:[ -][^\W\d_]+){0,2}", last.strip())
+    }
+    for source, nodes in (("tree", tree), ("focus", focuses)):
+        for node in nodes:
+            element = element_key(node)
+            if not lacks_role(node) or ("NO_ROLE", element) in seen:
+                continue
+            seen.add(("NO_ROLE", element))
+            where = role_in_descendant(tree, node, speech_by_element[element], role_phrases)
+            if where:
+                detail = f"the role ({where!r}) is on a descendant, read as content, not on the actionable node"
+                findings.append(finding("NO_ROLE", source, node, detail, node["t"], conformance="advisory"))
+            else:
+                findings.append(finding("NO_ROLE", source, node, "no role on the node or its descendants", node["t"]))
 
     px_per_dp = density(tree + focuses)
     if px_per_dp:
