@@ -70,7 +70,8 @@ class FocusLoggerService : AccessibilityService() {
             if (node.isWorthLogging()) {
                 count++
                 val focused = if (node.isAccessibilityFocused) " FOCUSED" else ""
-                logA11y("tree", "  ".repeat(depth) + node.describe() + focused)
+                val inputFocused = if (node.isFocused) " INPUT_FOCUSED" else ""
+                logA11y("tree", "  ".repeat(depth) + node.describe() + focused + inputFocused)
             }
             for (i in 0 until node.childCount) node.getChild(i)?.let { visit(it, depth + 1) }
         }

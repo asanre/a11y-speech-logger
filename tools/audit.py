@@ -6,6 +6,11 @@
       focus and speech live while you walk the screen with TalkBack, dumps and screenshots
       again when you press Enter (screen-end.png), then saves session.txt and runs `rules`.
 
+  audit.py keyboard <screen> [--steps 60] [--out audits] [--serial SERIAL]
+      Walks the screen with TAB, as a keyboard user without TalkBack: dumps the tree and takes a
+      screenshot (keyboard/step-NN.png) after each key, stops when focus cycles or stops moving,
+      then saves session.txt and runs `rules`.
+
   audit.py rules <dir>
       Parses <dir>/session.txt and writes <dir>/findings.json.
 
@@ -43,10 +48,13 @@ WCAG = {
     "1.3.1": ("Info and Relationships", "A"),
     "1.3.2": ("Meaningful Sequence", "A"),
     "1.4.3": ("Contrast (Minimum)", "AA"),
+    "2.1.1": ("Keyboard", "A"),
+    "2.1.2": ("No Keyboard Trap", "A"),
     "2.4.2": ("Page Titled", "A"),
     "2.4.3": ("Focus Order", "A"),
     "2.4.4": ("Link Purpose (In Context)", "A"),
     "2.4.6": ("Headings and Labels", "AA"),
+    "2.4.7": ("Focus Visible", "AA"),
     "2.5.3": ("Label in Name", "A"),
     "2.5.8": ("Target Size (Minimum)", "AA"),
     "3.3.2": ("Labels or Instructions", "A"),
@@ -77,6 +85,8 @@ RULES = {
     "FOCUS_MOVED_AFTER_ACTION": {"severity": "medium", "wcag": ["2.4.3"], "conformance": "advisory"},
     # A failure below 3:1, which no text size passes; advisory up to 4.5:1, which large text passes.
     "TEXT_CONTRAST": {"severity": "medium", "wcag": ["1.4.3"], "conformance": "failure"},
+    "FOCUS_NOT_VISIBLE": {"severity": "high", "wcag": ["2.4.7"], "conformance": "failure"},
+    "KEYBOARD_UNREACHABLE": {"severity": "high", "wcag": ["2.1.1"], "conformance": "failure"},
 }
 
 # Classes a clickable node gets when nothing sets its role: Compose's default, plain Views and layouts.
@@ -93,6 +103,11 @@ FOCUS_AFTER_ACTION_MS = 1000
 CONTRAST_TEXT, CONTRAST_LARGE_TEXT = 4.5, 3.0
 # Below this share of the node's pixels the background is an image or a gradient: contrast is not measured.
 UNIFORM_BACKGROUND = 0.4
+
+# The keyboard pass stops when input focus stays on the same element for this many keys.
+KEYBOARD_STUCK_STEPS = 3
+# Focus indicators are often drawn just outside the element: pixels this far out are compared too.
+FOCUS_RING_PX = 6
 
 # WCAG 2.5.8 asks for 24x24 CSS px; Android's guideline is 48dp. One dp is one CSS px.
 WCAG_TARGET_DP = 24
@@ -627,6 +642,94 @@ def contrast_findings(tree, screenshot):
             yield finding("TEXT_CONTRAST", "screenshot", node, detail, node["t"], conformance=conformance)
 
 
+# --- keyboard ------------------------------------------------------------------------------
+
+def input_focus_sequence(all_dumps):
+    """The input-focused node of each dump (None when nothing has input focus), in step order."""
+    return [next((n for n in nodes if "INPUT_FOCUSED" in n["flags"]), None) for _, nodes in all_dumps]
+
+
+def keyboard_ending(sequence):
+    """Why the pass ended: "cycle" when focus came back to the first element, "stuck" when it stopped
+    moving, None when it ran out of steps."""
+    keys = [element_key(n) if n else None for n in sequence]
+    first = next((k for k in keys if k), None)
+    seen_first = [i for i, k in enumerate(keys) if k == first]
+    if first and len(seen_first) > 1 and any(k not in (first, None) for k in keys[seen_first[0]:seen_first[-1]]):
+        return "cycle"
+    tail = keys[-KEYBOARD_STUCK_STEPS:]
+    if len(keys) > KEYBOARD_STUCK_STEPS and tail[0] and len(set(tail)) == 1:
+        return "stuck"
+    return None
+
+
+def expanded(bounds, height, width):
+    left, top, right, bottom = bounds
+    return (max(left - FOCUS_RING_PX, 0), max(top - FOCUS_RING_PX, 0),
+            min(right + FOCUS_RING_PX, width), min(bottom + FOCUS_RING_PX, height))
+
+
+def region_changed(before, after, bounds, previous_bounds=None):
+    """Whether any pixel around the element changed, leaving out the previous element's area: its
+    indicator going away is not this element's indicator appearing."""
+    height, width = len(after), len(after[0])
+    left, top, right, bottom = expanded(bounds, height, width)
+    skip = expanded(previous_bounds, height, width) if previous_bounds else None
+    for y in range(top, bottom):
+        for x in range(left, right):
+            if skip and skip[0] <= x < skip[2] and skip[1] <= y < skip[3]:
+                continue
+            if before[y][x] != after[y][x]:
+                return True
+    return False
+
+
+def run_keyboard_rules(records, steps_dir):
+    """Rules over a keyboard pass: dump N and keyboard/step-NN.png were taken after the Nth TAB."""
+    all_dumps = dumps(records)
+    app_pkg = all_dumps[0][0].get("pkg") if all_dumps else None
+    sequence = input_focus_sequence(all_dumps)
+    ending = keyboard_ending(sequence)
+    findings, flagged = [], set()
+
+    previous = None
+    for i, node in enumerate(sequence):
+        changed = node is not None and (previous is None or element_key(node) != element_key(previous))
+        before, after = steps_dir / f"step-{i - 1:02}.png", steps_dir / f"step-{i:02}.png"
+        if changed and i > 0 and isinstance(node.get("bounds"), list) and before.exists() and after.exists():
+            key = element_key(node)
+            previous_bounds = previous.get("bounds") if previous and isinstance(previous.get("bounds"), list) else None
+            if key not in flagged and not region_changed(read_png(before)[2], read_png(after)[2], node["bounds"], previous_bounds):
+                flagged.add(key)
+                findings.append(finding("FOCUS_NOT_VISIBLE", "keyboard", node, f"nothing changed on screen when it got focus (step {i})", node["t"]))
+        previous = node or previous
+
+    reached = {element_key(n) for n in sequence if n}
+    if ending == "stuck":
+        why = f"focus stopped moving at {label(sequence[-1]) or sequence[-1].get('id')!r}: check for a keyboard trap (2.1.2)"
+    elif ending == "cycle":
+        why = "never got focus in a full TAB cycle"
+    else:
+        why = f"not reached in {len(sequence) - 1} TABs"
+    for node in (all_dumps[0][1] if all_dumps else []):
+        if "clickable" in node["flags"] and "disabled" not in node["flags"] and element_key(node) not in reached:
+            findings.append(finding("KEYBOARD_UNREACHABLE", "keyboard", node, why, node["t"]))
+
+    summary = defaultdict(int)
+    for f in findings:
+        summary[f["rule"]] += 1
+    return {
+        "package": app_pkg,
+        "summary": dict(summary),
+        "keyboard": {
+            "ending": ending or "max steps",
+            "sequence": [label(n) or n.get("id") if n else None for n in sequence],
+        },
+        "findings": findings,
+        "tree": all_dumps[0][1] if all_dumps else [],
+    }
+
+
 # --- commands ------------------------------------------------------------------------------
 
 def adb_cmd(serial, *args):
@@ -722,9 +825,42 @@ def capture(args):
     rules(argparse.Namespace(dir=folder))
 
 
+def keyboard(args):
+    services = adb(args.serial, "shell", "settings", "get", "secure", "enabled_accessibility_services")
+    if "talkback" in services.casefold():
+        print("warning: TalkBack is on; keyboard users browse without it and TAB behaves differently", file=sys.stderr)
+    if FOCUS_LOGGER not in services and f"{PACKAGE}/{PACKAGE}.FocusLoggerService" not in services:
+        print("warning: A11y Focus Logger is not enabled, so nothing will be captured", file=sys.stderr)
+    folder = output_dir(args.out, args.screen)
+    steps = folder / "keyboard"
+    steps.mkdir()
+    adb(args.serial, "logcat", "-c")
+    for step in range(args.steps + 1):
+        if step:
+            adb(args.serial, "shell", "input", "keyevent", "KEYCODE_TAB")
+            time.sleep(0.5)
+        snapshot(args.serial, steps / f"step-{step:02}.png")
+        session = read_session(args.serial, dumps=step + 1)
+        sequence = input_focus_sequence(dumps([r for r in map(parse_record, session.splitlines()) if r]))
+        current = sequence[-1] if sequence else None
+        name = (label(current) or current.get("id")) if current else "(no input focus)"
+        print(f"{step:02} {name}", flush=True)
+        if keyboard_ending(sequence):
+            break
+    (folder / "session.txt").write_text(session, encoding="utf-8")
+    print(f"saved {folder}")
+    rules(argparse.Namespace(dir=folder))
+
+
 def rules(args):
     folder = Path(args.dir)
     records = parse_session(folder / "session.txt")
+    if (folder / "keyboard").is_dir():
+        result = run_keyboard_rules(records, folder / "keyboard")
+        (folder / "findings.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        counts = ", ".join(f"{rule}={n}" for rule, n in result["summary"].items()) or "none"
+        print(f"keyboard ({result['keyboard']['ending']}): {counts} -> {folder / 'findings.json'}")
+        return
     # screen-end.png matches the last dump; older captures have one screen.png, matching a single dump.
     screenshot = folder / "screen-end.png"
     if not screenshot.exists() and len(dumps(records)) == 1 and (folder / "screen.png").exists():
@@ -743,6 +879,12 @@ def main():
     cap.add_argument("--out", default="audits", help="base folder (default: audits)")
     cap.add_argument("--serial", help="adb device serial, when more than one is connected")
     cap.set_defaults(func=capture)
+    key = sub.add_parser("keyboard", help="walk a screen with TAB and check keyboard access")
+    key.add_argument("screen", help="name for the screen, used as folder name")
+    key.add_argument("--steps", type=int, default=60, help="maximum number of TABs (default: 60)")
+    key.add_argument("--out", default="audits", help="base folder (default: audits)")
+    key.add_argument("--serial", help="adb device serial, when more than one is connected")
+    key.set_defaults(func=keyboard)
     rul = sub.add_parser("rules", help="run the rules over a captured folder")
     rul.add_argument("dir", help="folder with session.txt")
     rul.set_defaults(func=rules)
