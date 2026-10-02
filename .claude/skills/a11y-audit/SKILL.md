@@ -1,92 +1,141 @@
 ---
 name: a11y-audit
-description: Turns an a11y-speech-logger capture (session.txt, findings.json, screen-start.png, screen-end.png) into an accessibility report for that screen. Use when asked to audit, analyze or report on a capture folder under audits/, or after running `tools/audit.py capture`. Optional argument - the path to the audited app's source repo, to locate each problem in the code by its testTag or text.
+description: Audits the accessibility of an Android screen against WCAG 2.2 A/AA and writes a report a developer can act on. Two modes - from an a11y-speech-logger capture folder (session.txt, findings.json, screenshots), or from the screen's source code when there is no device. Use when asked to audit, analyze or report on a capture under audits/, after running `tools/audit.py capture` or `keyboard`, or to review a screen's code for accessibility. Optional argument - the path to the audited app's source repo, to locate each problem in the code.
 ---
 
-# Accessibility audit of a captured screen
+# Accessibility audit of a screen
 
-Input: one capture folder (`audits/<date>/<screen>/`) or a date folder with several. Each holds:
+Pick the mode from what you have:
 
-- `findings.json` — output of `tools/audit.py rules`: `package` (the audited app), `summary`, `findings` (deterministic heuristics), `timeline` (each focused element with the utterances TalkBack spoke for it, including the keyboard and system UI) and `tree` (the last node dump, taken when the walk ended).
-- `session.txt` — the raw log. Read it only when `findings.json` is not enough.
-- `screen-start.png` and `screen-end.png` — screenshots taken when the capture started and when it ended. Always look at them. `tree` matches `screen-end.png`; if the start shows another screen, the walk began elsewhere. Older captures have a single `screen.png`, taken at the start.
+- **Capture mode**: a capture folder (`audits/<date>/<screen>/`) or a date folder with several. It shows
+  what TalkBack really said and is the reliable mode.
+- **Code mode**: no capture, only the screen's source. Use it when no device is available. Every finding
+  is marked *from code, not verified on device*, and the report says which capture would confirm it.
 
-The log format and every field are described in the repo's README ("Log format").
+The criteria, what each one asks of a native screen and what evidence answers it are in
+[references/wcag-mobile.md](references/wcag-mobile.md). For each fix, use the `compose-a11y` skill.
 
-## Steps
+## Capture mode
 
-1. **Check the capture is usable.**
-   - If there are no `[speech]` records, the speech logger was not the default TTS engine. The report then covers semantics only; say so at the top.
-   - If there are no `[focus]` or `[tree]` records, the A11y Focus Logger was not enabled. Stop and say so.
-2. **Verify every deterministic finding.** They are heuristics. Confirm or dismiss each one with evidence from the timeline, the tree or the screenshot, and keep the dismissed ones in the report with the reason.
+### Input
+
+- **`findings.json`**, the output of `tools/audit.py rules`:
+  - `package`: the audited app;
+  - `findings`: each one with `rule`, `severity`, `wcag`, `conformance` (`failure` or `advisory`),
+    `source` (`tree`, `focus`, `speech`, `screenshot`, `keyboard` or `atf`), the `node`, a `detail`, and
+    `overlaps` when an ATF check reported the same element;
+  - `summary` and `summary_by_wcag`: counts per rule and per criterion;
+  - `timeline`: each focused element with what TalkBack said for it;
+  - `tree`: the last node dump, which matches `screen-end.png`;
+  - `titles`: the titles TalkBack can announce for the screen;
+  - `appeared`: text that showed up during the walk and was never spoken or focused;
+  - `atf`: whether the Accessibility Test Framework ran on the last dump, and why contrast was skipped
+    if it was. `null` in captures taken before ATF was added;
+  - `keyboard` (keyboard pass only): the input-focus `sequence` and its `ending` (`cycle` or `stuck`).
+- **`session.txt`**: the raw log. Read it only when `findings.json` is not enough. The format is in the
+  repo's README ("Log format").
+- **`screen-start.png`, `screen-end.png`**: always look at them. If the start shows another screen, the
+  walk began elsewhere. Older captures have a single `screen.png`.
+- **`keyboard/step-NN.png`** (keyboard pass only): the screen after each TAB.
+
+### Steps
+
+1. **Check what the capture can tell.**
+   - No `[speech]`: the logger wasn't the TTS engine. Audit semantics only and say so at the top.
+   - No `[focus]` or `[tree]`: the focus logger was off. Stop and say so.
+   - `atf` is `null` or has `error`: ATF results are missing; the own rules still apply.
+   - `atf.skipped` is `contrast`: contrast comes only from `TEXT_CONTRAST` on the screenshot.
+   - No keyboard pass: 2.1.1, 2.1.2 and 2.4.7 are *Not tested*.
+2. **Verify every finding.** All of them are evidence to check, not verdicts. Confirm or dismiss each one
+   with the timeline, the tree or the screenshot, and keep the dismissed ones with the reason.
+   - `SILENT_FOCUS`: confirm in the timeline that nothing was spoken.
+   - `NO_ROLE` *failure*: no role anywhere, so TalkBack gives no hint that it can be activated.
+     *Advisory*: the role is on a descendant (`detail` says which), which Compose does when the
+     actionable node has children of its own. TalkBack reads it as content ("Button, Stop").
+   - `ROLE_BEFORE_LABEL`: advisory. Report the cause, a name missing on the actionable node, not the order.
+     See "Advisory, not failure" in the reference.
+   - `NESTED_ACTIONABLE`: confirm in the timeline that the inner control is a separate focus stop.
    - `ORDER_JUMP`: dismiss it if the previous step was a backwards swipe or the list scrolled.
-   - `DUPLICATE_LABEL`: dismiss it if TalkBack's speech disambiguates the elements (for example, it reads the product name too).
-   - `SILENT_FOCUS`: confirm with the timeline that nothing was spoken.
-   - `ROLE_BEFORE_LABEL`: confirm the focused node has no `text` or `desc` of its own. An utterance like "Context, Button, Send" has the same cause and the rule misses it; `LABEL_IN_CHILD` on the node usually catches it.
-   - `LABEL_IN_CHILD`: if TalkBack reads name then role ("Mic, Button"), keep it low; if it reads the role first, it is the `ROLE_BEFORE_LABEL` problem.
-   - `LONG_SPEECH`: decide whether the whole text needed to be spoken at once, or whether a short status plus navigable content would do.
-3. **Add the checks that need judgement.**
-   - Labels that don't make sense out of context ("More", "Click here", "Image").
-   - Excessive verbosity: a container read whole in one go, or decorative content read aloud.
-   - Missing state, such as selected, expanded or checked, when the screenshot shows it.
-   - Reading order against the visual order in the screenshot.
-   - Mixed languages in one utterance.
-   - Text in the screenshot that never appears in the tree or the speech.
-   - Interactive elements without a role ("Button", "Switch"…) or without an action hint.
-4. **Locate the code** (only when a repo path was given).
-   - For nodes with `id` other than `-`, search the repo for that id as a test tag (`testTag("<id>")` or a constant holding it).
-   - Otherwise search for the visible text in string resources and then its usages.
-   - Report `path:line` when found, and "not located" when not. Never guess a file.
-5. **Write `report.md` in the capture folder** with this structure:
-   - **Summary**:
-     - the screen, the app package, whether speech was captured;
-     - a table of confirmed findings by severity.
-   - **Findings**, most severe first. One section each with:
-     - what TalkBack says, quoted from the timeline;
-     - the evidence (node fields, screenshot);
-     - why it matters, with the WCAG criterion;
-     - the fix in Compose;
-     - the location in code.
-   - **Dismissed heuristics**, each with the reason.
-   - **Not verified**: anything the capture could not show, such as states not visited or screens not walked.
+   - `FOCUS_MOVED_AFTER_ACTION`: find where focus landed in the screenshot. At the top of the screen,
+     or on an unrelated element, it is a 2.4.3 failure. On the result of the action, it is fine.
+   - `DUPLICATE_LABEL`: dismiss it if the speech tells the elements apart.
+   - `LIST_SEMANTICS`: check in the screenshot that it is a visual list.
+   - `SCREEN_TITLE` and `titles`: across several captures, the same title on different screens is also
+     a failure.
+   - `TEXT_CONTRAST`, `ATF:TextContrastCheck`: dismiss them on text over images or gradients, which the
+     screenshot shows. TalkBack's green focus outline can skew the focused element.
+   - `KEYBOARD_UNREACHABLE`, `FOCUS_NOT_VISIBLE`: check the step screenshots. Elements reached with
+     arrows (carousels) are *Not verified*, not failures.
+   - `ATF:*`: ATF's messages are terse. Restate them as the user's problem.
+   - A finding with `overlaps` and the ATF finding it names are one problem. Report it once and cite both.
+3. **Add the checks that need judgement.** Go through the reference table. These are the usual ones:
+   - text that looks like a heading but isn't marked (1.3.1);
+   - a selected tab, filter or option that is visible but not spoken (1.3.1, 4.1.2);
+   - colour as the only cue (1.4.1);
+   - decorative images that are read aloud, or informative ones that aren't (1.1.1);
+   - links that act as buttons, or buttons that act as links; radios that act as buttons (4.1.2);
+   - a placeholder as the only label, and required fields not exposed (3.3.2);
+   - text in the screenshot that is missing from the tree and the speech;
+   - text in `appeared` that should have been announced (4.1.3);
+   - vague labels out of context ("More", "Image"), verbosity, mixed languages;
+   - reading order against the visual order.
+4. **Locate the code**, only when a repo path was given.
+   - A node `id` other than `-` is the Compose `testTag` (`testTagsAsResourceId`) or the View id. Search
+     for it, or for a constant holding it.
+   - Otherwise search for the visible text in the string resources, then for its usages.
+   - Report `path:line` when found and "not located" when not. Never guess a file.
+5. **Write `report.md` in the capture folder** (format below).
+
+## Code mode
+
+1. Find the screen's composables (or layouts) from the name the user gives, and follow the components they use.
+2. Go through the reference table and the judgement list above, reading semantics in the code:
+   - labels (`contentDescription`, `semantics`);
+   - roles (`Role`, `clickable(role = …)`);
+   - state (`selected`, `toggleable`, `stateDescription`);
+   - merging (`mergeDescendants`, `clearAndSetSemantics`), headings and `paneTitle`;
+   - `liveRegion`, traversal and target sizes.
+3. Mark each finding *from code, not verified on device*, with `path:line`. Name the capture that would
+   confirm it, for example: `python3 tools/audit.py capture <screen>`, then swipe to the sort button.
+4. In the conformance table, contrast, focus visibility and anything that depends on runtime state are
+   *Not tested*, unless the code makes them certain (a hard-coded colour pair).
+
+## Report format
+
+Write it in the language the user asked in. It is for developers who aren't accessibility experts: plain
+words, one problem per section, and what to hear once it's fixed.
+
+1. **Summary.** Screen, app package, mode, and what the capture covered: speech, ATF, keyboard pass.
+   Then 2–3 sentences on the most serious problems.
+2. **Conformance by criterion.** One row per criterion of the reference. Result is **Fail**, **Advisory**
+   (only advisory findings), **Pass** (evidence and no problems) or **Not tested**, with the reason in a
+   few words. Never mark Pass without evidence.
+3. **Problems**, most severe first, grouped by what the user experiences. If five product cards have the
+   same nested button, that is one problem with five instances. Each problem has:
+   - **What happens**: what a TalkBack or keyboard user lives, with the speech quoted exactly from the
+     timeline;
+   - **Why it matters**: one sentence, and the criteria with level and conformance, linked to
+     `https://www.w3.org/WAI/WCAG22/Understanding/<slug>`;
+   - **Where**: the elements (label, bounds, screenshot) and `path:line` when located;
+   - **Fix**: the change, from the `compose-a11y` skill. For a View-based screen, use the View
+     equivalent (`contentDescription`, `android:accessibilityHeading`, `ViewCompat.setStateDescription`,
+     `AccessibilityDelegateCompat`, `android:accessibilityPaneTitle`, `android:accessibilityLiveRegion`);
+   - **Expected speech after the fix**, e.g. "Sort, Button, collapsed";
+   - **Evidence**: rule names, or "judgement" with what you looked at.
+4. **Dismissed findings**, each with the reason.
+5. **Not tested**: what the capture couldn't show, and the capture that would (a state not visited, a
+   keyboard pass, a larger font size).
 
 ## Severity
 
-- **high**: a TalkBack user can't identify or operate the element. Examples: no label, silent focus, unreachable content.
-- **medium**: it works but is confusing or slow. Examples: role read before the name, missing hint, small target, no headings, duplicate labels.
-- **low**: polish. Examples: label in a child that TalkBack reads fine, repeated role word, suspect order, verbosity.
-
-## WCAG references
-
-| Problem | WCAG 2.2 |
-|---|---|
-| No label, label in child, role before the name, missing role or state | 4.1.2 Name, Role, Value; 1.1.1 Non-text Content |
-| Field without hint or label | 3.3.2 Labels or Instructions |
-| Small touch target | 2.5.8 Target Size (Minimum). Android's own guideline is 48dp. |
-| Reading order | 1.3.2 Meaningful Sequence; 2.4.3 Focus Order |
-| No headings | 1.3.1 Info and Relationships; 2.4.6 Headings and Labels |
-| Duplicate or vague labels | 2.4.6 Headings and Labels; 2.4.4 Link Purpose |
-| Mixed languages | 3.1.2 Language of Parts |
-
-## Compose fixes
-
-| Problem | Fix |
-|---|---|
-| Icon-only control without a label | `Icon(contentDescription = "…")` inside an `IconButton`, or `Modifier.semantics { contentDescription = "…" }` on the clickable |
-| Label on a child, not on the clickable, or role read before the name | Move the description to the clickable, or merge with `Modifier.semantics(mergeDescendants = true) {}`. Check that the child doesn't open its own semantics boundary. |
-| Field without hint | `TextField(label = { Text("…") })` instead of a separate `Text` placeholder |
-| Small target | `Modifier.minimumInteractiveComponentSize()` or `Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)` |
-| Role word repeated ("Add button, Button") | Drop "button" from the description; set the role with `Modifier.clickable(role = Role.Button)` or `semantics { role = Role.Button }` |
-| Vague action hint | `Modifier.clickable(onClickLabel = "open details")` |
-| No headings | `Modifier.semantics { heading() }` on section titles |
-| Wrong order | `Modifier.semantics { isTraversalGroup = true }` on the group, `traversalIndex` on its children |
-| Long text spoken at once | Announce a short status in the live region and let the user move into the content |
-| Whole list read at once | Remove `mergeDescendants` or `clearAndSetSemantics` from the container. Expose items separately, with `collectionInfo` on the list if needed. |
-| `[announce]` records | Replace `announceForAccessibility` with `Modifier.semantics { liveRegion = LiveRegionMode.Polite }` on the changing content |
-| Decorative content read aloud | `Icon(contentDescription = null)` or `Modifier.clearAndSetSemantics {}` |
+- **high**: a user can't identify, reach or operate something (no name, silent focus, unreachable by
+  keyboard, no visible focus).
+- **medium**: it works but misleads or slows down (missing role or state, wrong order, missing title,
+  unannounced status, low contrast).
+- **low**: polish (repeated role word, verbosity, a 24–47dp target).
 
 ## Rules for the report
 
-- Quote speech exactly as captured. Don't paraphrase what TalkBack said.
-- Don't report a problem you can't point to in the capture.
-- Write the report in the language the user asked in.
+- Quote speech exactly as captured. Never paraphrase what TalkBack said.
+- Don't report a problem you can't point to in the capture or the code.
+- Failure only when the criterion is broken as written. Guidelines and good practice are advisory.
