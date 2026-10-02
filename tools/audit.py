@@ -4,7 +4,8 @@
   audit.py capture <screen> [--out audits] [--serial SERIAL]
       Clears logcat, dumps the node tree and takes a screenshot (screen-start.png), shows
       focus and speech live while you walk the screen with TalkBack, dumps and screenshots
-      again when you press Enter (screen-end.png), then saves session.txt and runs `rules`.
+      again when you press Enter (screen-end.png), runs the Accessibility Test Framework checks on
+      that last dump, then saves session.txt and runs `rules`.
 
   audit.py keyboard <screen> [--steps 60] [--out audits] [--serial SERIAL]
       Walks the screen with TAB, as a keyboard user without TalkBack: dumps the tree and takes a
@@ -116,6 +117,7 @@ RECORD = re.compile(r"^\[(\w+)\] t=(\d+) ?(.*)$")
 TOKEN = re.compile(r'(\w+)=("(?:[^"\\]|\\.)*"|\S+)|(\S+)')
 BOUNDS = re.compile(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]")
 TREE_DONE = re.compile(r"^\[tree\] t=\d+ (end nodes=|no active window)", re.MULTILINE)
+ATF_DONE = re.compile(r"^\[atf\] t=\d+ end ", re.MULTILINE)
 
 
 # --- parsing -------------------------------------------------------------------------------
@@ -759,8 +761,9 @@ def output_dir(base, screen):
     return candidate
 
 
-def snapshot(serial, path):
-    adb(serial, "shell", "am", "broadcast", "-a", DUMP_ACTION)
+def snapshot(serial, path, atf=False):
+    extras = ["--ez", "atf", "true"] if atf else []
+    adb(serial, "shell", "am", "broadcast", "-a", DUMP_ACTION, *extras)
     path.write_bytes(adb(serial, "exec-out", "screencap", "-p", binary=True))
 
 
@@ -798,11 +801,11 @@ def follow(serial):
     return proc
 
 
-def read_session(serial, dumps):
-    """The dump is logged asynchronously by the service: wait until all of them are in the log."""
-    for _ in range(20):
+def read_session(serial, dumps, atf=False):
+    """The dump and the ATF checks are logged asynchronously by the service: wait until all are in the log."""
+    for _ in range(40):
         session = adb(serial, "logcat", "-d", "-s", f"{LOG_TAG}:I", "-v", "raw")
-        if len(TREE_DONE.findall(session)) >= dumps:
+        if len(TREE_DONE.findall(session)) >= dumps and (not atf or ATF_DONE.search(session)):
             break
         time.sleep(0.25)
     return session
@@ -818,8 +821,8 @@ def capture(args):
     input()
     viewer.terminate()
     # Dumped again because the screen can change after the capture starts (a sheet opened, a scroll).
-    snapshot(args.serial, folder / "screen-end.png")
-    session = read_session(args.serial, dumps=2)
+    snapshot(args.serial, folder / "screen-end.png", atf=True)
+    session = read_session(args.serial, dumps=2, atf=True)
     (folder / "session.txt").write_text(session, encoding="utf-8")
     print(f"saved {folder}")
     rules(argparse.Namespace(dir=folder))

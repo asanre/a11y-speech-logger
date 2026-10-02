@@ -3,6 +3,9 @@ agp = "9.2.1"
 kotlin = "2.4.20"
 compose-bom = "2026.09.00"
 activity = "1.13.0"
+atf = "4.1.1"
+# The one ATF depends on: its API returns Guava collections, but its POM puts Guava in runtime scope only.
+atf-guava = "31.0.1-android"
 
 [libraries]
 compose-bom = { module = "androidx.compose:compose-bom", version.ref = "compose-bom" }
@@ -10,6 +13,8 @@ compose-material3 = { module = "androidx.compose.material3:material3" }
 compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
 compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
 activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activity" }
+atf = { module = "com.google.android.apps.common.testing.accessibility.framework:accessibility-test-framework", version.ref = "atf" }
+atf-guava = { module = "com.google.guava:guava", version.ref = "atf-guava" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

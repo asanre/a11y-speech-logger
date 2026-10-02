@@ -5,11 +5,21 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.Bitmap
 import android.graphics.Rect
 import android.os.Build
+import android.view.Display
 import android.view.View
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.google.android.apps.common.testing.accessibility.framework.AccessibilityCheckPreset
+import com.google.android.apps.common.testing.accessibility.framework.AccessibilityCheckResult.AccessibilityCheckResultType
+import com.google.android.apps.common.testing.accessibility.framework.AccessibilityHierarchyCheckResult
+import com.google.android.apps.common.testing.accessibility.framework.Parameters
+import com.google.android.apps.common.testing.accessibility.framework.uielement.AccessibilityHierarchyAndroid
+import com.google.android.apps.common.testing.accessibility.framework.uielement.ViewHierarchyElement
+import com.google.android.apps.common.testing.accessibility.framework.utils.contrast.BitmapImage
+import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
@@ -17,12 +27,16 @@ import kotlin.math.roundToInt
  * - `[focus]` every node that receives accessibility focus, `[input]` every node that receives input focus,
  * - `[click]` every node activated,
  * - `[window]` window and pane changes, `[announce]` announcements,
- * - `[tree]` the active window's node tree, on `adb shell am broadcast -a <ACTION_DUMP>`.
+ * - `[tree]` the active window's node tree, on `adb shell am broadcast -a <ACTION_DUMP>`,
+ * - `[atf]` the Accessibility Test Framework results on that window, when the broadcast adds `--ez atf true`.
  */
 class FocusLoggerService : AccessibilityService() {
 
     private val dumpReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) = dumpTree()
+        override fun onReceive(context: Context, intent: Intent) {
+            dumpTree()
+            if (intent.getBooleanExtra(EXTRA_ATF, false)) checkWithAtf()
+        }
     }
 
     override fun onServiceConnected() {
@@ -78,6 +92,55 @@ class FocusLoggerService : AccessibilityService() {
         visit(root, 0)
         logA11y("tree", "end nodes=$count")
     }
+
+    /**
+     * Runs the checks of the Accessibility Test Framework, the ones Accessibility Scanner and Compose's
+     * `enableAccessibilityChecks()` run, and logs errors and warnings, then `[atf] end`. The contrast checks
+     * measure a screenshot, which an accessibility service can take from API 30.
+     */
+    private fun checkWithAtf() {
+        val root = rootInActiveWindow ?: return logA11y("atf", "end results=0 error=\"no active window\"")
+        if (Build.VERSION.SDK_INT < 30) return runAtf(root, null, "no screenshot below API 30")
+        takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
+            override fun onSuccess(screenshot: ScreenshotResult) {
+                val bitmap = screenshot.hardwareBuffer.use { buffer ->
+                    Bitmap.wrapHardwareBuffer(buffer, screenshot.colorSpace)?.copy(Bitmap.Config.ARGB_8888, false)
+                }
+                runAtf(root, bitmap, "screenshot not readable".takeIf { bitmap == null })
+            }
+
+            override fun onFailure(errorCode: Int) = runAtf(root, null, "screenshot failed with error $errorCode")
+        })
+    }
+
+    /** Without a screenshot ATF skips the contrast checks: [noScreenshot] says why, so it is not read as a pass. */
+    private fun runAtf(root: AccessibilityNodeInfo, screenshot: Bitmap?, noScreenshot: String?) {
+        runCatching<List<AccessibilityHierarchyCheckResult>> {
+            val hierarchy = AccessibilityHierarchyAndroid.newBuilder(root, this).build()
+            val parameters = Parameters().apply { screenshot?.let { putScreenCapture(BitmapImage(it)) } }
+            AccessibilityCheckPreset.getAccessibilityHierarchyChecksForPreset(AccessibilityCheckPreset.LATEST)
+                .flatMap { it.runCheckOnHierarchy(hierarchy, null, parameters) }
+                .filter { it.type in REPORTED_ATF_TYPES }
+        }.onSuccess { results ->
+            results.forEach { logA11y("atf", it.describe()) }
+            val skipped = noScreenshot?.let { " skipped=contrast reason=${it.quoted()}" } ?: ""
+            logA11y("atf", "end results=${results.size}$skipped")
+        }.onFailure {
+            logA11y("atf", "end results=0 error=${it.toString().quoted()}")
+        }
+    }
+
+    /** Same `id`, `class` and `bounds` format as [describe], so a result can be matched to its tree node. */
+    private fun AccessibilityHierarchyCheckResult.describe(): String = listOfNotNull(
+        "check=${sourceCheckClass.simpleName}",
+        "type=$type",
+        element?.describe(),
+        "msg=${getMessage(Locale.ENGLISH).quoted()}",
+    ).joinToString(" ")
+
+    private fun ViewHierarchyElement.describe(): String =
+        "id=${resourceName ?: "-"} class=${className?.toString()?.substringAfterLast('.')} " +
+            boundsInScreen.run { "bounds=[$left,$top][$right,$bottom]" }
 
     /**
      * Nodes that carry something TalkBack reads or acts on. Includes nodes that only carry a role: Compose
@@ -173,6 +236,8 @@ class FocusLoggerService : AccessibilityService() {
 
     companion object {
         const val ACTION_DUMP = "io.github.asanre.a11ylogger.DUMP"
+        private const val EXTRA_ATF = "atf"
+        private val REPORTED_ATF_TYPES = setOf(AccessibilityCheckResultType.ERROR, AccessibilityCheckResultType.WARNING)
         private const val EXTRA_ROLE_DESCRIPTION = "AccessibilityNodeInfo.roleDescription"
         private const val MIN_TOUCH_TARGET_DP = 48
         private const val EDIT_TEXT_CLASS = "android.widget.EditText"

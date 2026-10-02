@@ -25,5 +25,12 @@ dependencies {
     implementation(libs.compose.material3)
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.activity.compose)
+    implementation(libs.atf) {
+        exclude(group = "androidx.test")
+        exclude(group = "androidx.test.espresso")
+        exclude(group = "androidx.test.services")
+        exclude(group = "com.google.android.material")
+    }
+    compileOnly(libs.atf.guava)
     debugImplementation(libs.compose.ui.tooling)
 }
