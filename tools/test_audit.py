@@ -318,5 +318,60 @@ class KeyboardTest(unittest.TestCase):
         self.assertIn("2.1.2", f["detail"])
 
 
+class AtfTest(unittest.TestCase):
+    SALE = "id=a class=TextView text=\"Sale\" bounds=[0,0][40,20] size=20x10dp"
+
+    def atf(self, check, kind="ERROR", element="id=a class=TextView bounds=[0,0][40,20]"):
+        return f'[atf] t=20 check={check} type={kind} {element} msg="Some message"'
+
+    def test_error_takes_the_table_conformance_and_the_tree_node(self):
+        result = run(*tree((1, self.SALE)), self.atf("TextContrastCheck"), "[atf] t=21 end results=1")
+        [f] = rules(result, "ATF:TextContrastCheck")
+        self.assertEqual((f["conformance"], f["wcag"], f["source"]), ("failure", ["1.4.3"], "atf"))
+        self.assertEqual(f["node"]["text"], "Sale")
+        self.assertEqual(f["detail"], "Some message")
+        self.assertEqual(result["atf"], {"results": "1"})
+
+    def test_warning_is_advisory(self):
+        [f] = rules(run(*tree((1, self.SALE)), self.atf("TextContrastCheck", "WARNING")), "ATF:TextContrastCheck")
+        self.assertEqual(f["conformance"], "advisory")
+
+    def test_touch_target_follows_wcag_size(self):
+        small = "id=a class=Button text=\"Go\" clickable bounds=[0,0][40,40] size=20x20dp"
+        medium = "id=a class=Button text=\"Go\" clickable bounds=[0,0][40,40] size=40x40dp"
+        element = "id=a class=Button bounds=[0,0][40,40]"
+        [f] = rules(run(*tree((1, small)), self.atf("TouchTargetSizeCheck", element=element)), "ATF:TouchTargetSizeCheck")
+        self.assertEqual(f["conformance"], "failure")
+        [f] = rules(run(*tree((1, medium)), self.atf("TouchTargetSizeCheck", element=element)), "ATF:TouchTargetSizeCheck")
+        self.assertEqual(f["conformance"], "advisory")
+
+    def test_result_without_element(self):
+        [f] = rules(run(*tree((1, self.SALE)), self.atf("TraversalOrderCheck", element="")), "ATF:TraversalOrderCheck")
+        self.assertIsNone(f["node"])
+
+    def test_matches_an_element_without_id_by_bounds(self):
+        icon = "id=- class=View clickable bounds=[0,0][96,96] size=48x48dp issues=NO_LABEL"
+        result = run(*tree((1, icon)), self.atf("SpeakableTextPresentCheck", element="id=- class=View bounds=[0,0][96,96]"))
+        [ours] = rules(result, "NO_LABEL")
+        self.assertEqual(ours["overlaps"], "ATF:SpeakableTextPresentCheck")
+        self.assertEqual(len(rules(result, "ATF:SpeakableTextPresentCheck")), 1)
+
+    def test_contrast_measured_by_atf_is_not_measured_again(self):
+        with tempfile.TemporaryDirectory() as folder:
+            write_png(Path(folder) / "screen-end.png", text_block((255, 255, 255), (200, 200, 200)))
+            lines = tree((1, self.SALE)) + [self.atf("TextContrastCheck")]
+            result = audit.run_rules([audit.parse_record(line) for line in lines], Path(folder) / "screen-end.png")
+        self.assertEqual(rules(result, "TEXT_CONTRAST"), [])
+        self.assertEqual(len(rules(result, "ATF:TextContrastCheck")), 1)
+
+    def test_skipped_contrast_is_reported(self):
+        end = '[atf] t=21 end results=0 skipped=contrast reason="no screenshot below API 30"'
+        result = run(*tree((1, self.SALE)), end)
+        self.assertEqual(result["atf"]["reason"], "no screenshot below API 30")
+
+    def test_older_captures_have_no_atf(self):
+        self.assertIsNone(run(*tree((1, self.SALE)))["atf"])
+
+
 if __name__ == "__main__":
     unittest.main()

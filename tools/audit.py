@@ -49,6 +49,8 @@ WCAG = {
     "1.3.1": ("Info and Relationships", "A"),
     "1.3.2": ("Meaningful Sequence", "A"),
     "1.4.3": ("Contrast (Minimum)", "AA"),
+    "1.4.4": ("Resize Text", "AA"),
+    "1.4.11": ("Non-text Contrast", "AA"),
     "2.1.1": ("Keyboard", "A"),
     "2.1.2": ("No Keyboard Trap", "A"),
     "2.4.2": ("Page Titled", "A"),
@@ -88,6 +90,30 @@ RULES = {
     "TEXT_CONTRAST": {"severity": "medium", "wcag": ["1.4.3"], "conformance": "failure"},
     "FOCUS_NOT_VISIBLE": {"severity": "high", "wcag": ["2.4.7"], "conformance": "failure"},
     "KEYBOARD_UNREACHABLE": {"severity": "high", "wcag": ["2.1.1"], "conformance": "failure"},
+    # Accessibility Test Framework checks, as `ATF:<check>`. The conformance is that of an ERROR; a WARNING,
+    # which ATF gives when it can't be sure (unknown text size, a borderline value), is always advisory.
+    "ATF:SpeakableTextPresentCheck": {"severity": "high", "wcag": ["4.1.2", "1.1.1"], "conformance": "failure"},
+    "ATF:TextContrastCheck": {"severity": "medium", "wcag": ["1.4.3"], "conformance": "failure"},
+    "ATF:ClickableSpanCheck": {"severity": "medium", "wcag": ["4.1.2", "2.1.1"], "conformance": "failure"},
+    "ATF:TraversalOrderCheck": {"severity": "medium", "wcag": ["1.3.2", "2.4.3"], "conformance": "failure"},
+    # Same split as SMALL_TARGET: see target_conformance.
+    "ATF:TouchTargetSizeCheck": {"severity": "medium", "wcag": ["2.5.8"], "conformance": "advisory"},
+    "ATF:ImageContrastCheck": {"severity": "medium", "wcag": ["1.4.11"], "conformance": "advisory"},
+    "ATF:DuplicateSpeakableTextCheck": {"severity": "medium", "wcag": ["2.4.6"], "conformance": "advisory"},
+    "ATF:DuplicateClickableBoundsCheck": {"severity": "medium", "wcag": ["4.1.2"], "conformance": "advisory"},
+    "ATF:EditableContentDescCheck": {"severity": "medium", "wcag": ["4.1.2"], "conformance": "advisory"},
+    "ATF:ClassNameCheck": {"severity": "low", "wcag": ["4.1.2"], "conformance": "advisory"},
+    "ATF:TextSizeCheck": {"severity": "low", "wcag": ["1.4.4"], "conformance": "advisory"},
+    "ATF:LinkPurposeUnclearCheck": {"severity": "low", "wcag": ["2.4.4"], "conformance": "advisory"},
+    "ATF:RedundantDescriptionCheck": {"severity": "low", "wcag": [], "conformance": "advisory"},
+}
+
+# Our rules that look for what an ATF check does. Both are kept, the ours marked, until compared on real captures.
+OVERLAPS = {
+    "NO_LABEL": "ATF:SpeakableTextPresentCheck",
+    "SMALL_TARGET": "ATF:TouchTargetSizeCheck",
+    "DUPLICATE_LABEL": "ATF:DuplicateSpeakableTextCheck",
+    "REPEATED_ROLE": "ATF:RedundantDescriptionCheck",
 }
 
 # Classes a clickable node gets when nothing sets its role: Compose's default, plain Views and layouts.
@@ -373,6 +399,22 @@ def focus_moves_after_action(records, app_pkg):
                 break
 
 
+def atf_findings(records, tree):
+    """ATF results, with the tree node they point at when there is one, for its label and size."""
+    by_key = {element_key(n): n for n in tree}
+    for r in records:
+        if r["kind"] != "atf" or "check" not in r:
+            continue
+        node = by_key.get(element_key(r), r) if "bounds" in r else None
+        if r.get("type") == "WARNING":
+            conformance = "advisory"
+        elif r["check"] == "TouchTargetSizeCheck" and node:
+            conformance = target_conformance(node)
+        else:
+            conformance = None
+        yield finding(f"ATF:{r['check']}", "atf", node, r.get("msg"), r["t"], conformance)
+
+
 def run_rules(records, screenshot=None):
     """`screenshot` is a PNG taken when the last dump was, for contrast."""
     all_dumps = dumps(records)
@@ -508,8 +550,16 @@ def run_rules(records, screenshot=None):
         if label(n) and label(n) not in before and label(n) not in focused and not was_spoken(label(n), spoken)
     }) if first_dump is not last_dump else []
 
+    atf = list(atf_findings(records, tree))
+    atf_keys = {(f["rule"], element_key(f["node"])) for f in atf if f["node"]}
+    atf_run = next((r for r in reversed(records) if r["kind"] == "atf" and "end" in r["flags"]), None)
+
     if screenshot:
-        findings.extend(contrast_findings(tree, screenshot))
+        # ATF measures contrast too: ours stays for what it didn't measure (below API 30, older captures).
+        findings.extend(
+            f for f in contrast_findings(tree, screenshot)
+            if ("ATF:TextContrastCheck", element_key(f["node"])) not in atf_keys
+        )
 
     nodes = tree or focuses
     if nodes and not any("heading" in n["flags"] for n in nodes):
@@ -525,6 +575,11 @@ def run_rules(records, screenshot=None):
                 "DUPLICATE_LABEL", "tree", nodes_with_label[0],
                 f"{len(nodes_with_label)} actionable elements share this label",
             ))
+
+    for f in findings:
+        if f["node"] and (OVERLAPS.get(f["rule"]), element_key(f["node"])) in atf_keys:
+            f["overlaps"] = OVERLAPS[f["rule"]]
+    findings.extend(atf)
 
     findings.sort(key=lambda f: (("high", "medium", "low").index(f["severity"]), f["conformance"] != "failure"))
     summary = defaultdict(int)
@@ -542,6 +597,7 @@ def run_rules(records, screenshot=None):
         "findings": findings,
         "titles": titles,
         "appeared": appeared,
+        "atf": {k: v for k, v in atf_run.items() if k in ("results", "skipped", "reason", "error")} if atf_run else None,
         "timeline": timeline,
         "tree": tree,
     }
