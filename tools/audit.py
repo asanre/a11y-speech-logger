@@ -41,6 +41,7 @@ WCAG = {
     "1.1.1": ("Non-text Content", "A"),
     "1.3.1": ("Info and Relationships", "A"),
     "1.3.2": ("Meaningful Sequence", "A"),
+    "2.4.2": ("Page Titled", "A"),
     "2.4.3": ("Focus Order", "A"),
     "2.4.4": ("Link Purpose (In Context)", "A"),
     "2.4.6": ("Headings and Labels", "AA"),
@@ -69,6 +70,9 @@ RULES = {
     "CONFLICTING_STATE": {"severity": "medium", "wcag": ["4.1.2"], "conformance": "failure"},
     "RAW_TEXT_SPOKEN": {"severity": "high", "wcag": ["1.1.1", "4.1.2"], "conformance": "failure"},
     "NESTED_ACTIONABLE": {"severity": "medium", "wcag": ["4.1.2", "2.4.3"], "conformance": "advisory"},
+    "LIST_SEMANTICS": {"severity": "medium", "wcag": ["1.3.1"], "conformance": "advisory"},
+    "SCREEN_TITLE": {"severity": "medium", "wcag": ["2.4.2"], "conformance": "failure"},
+    "FOCUS_MOVED_AFTER_ACTION": {"severity": "medium", "wcag": ["2.4.3"], "conformance": "advisory"},
 }
 
 # Classes a clickable node gets when nothing sets its role: Compose's default, plain Views and layouts.
@@ -77,6 +81,9 @@ GENERIC_CLASSES = {"View", "ViewGroup", "TextView", "ImageView"}
 RAW_MARKUP = re.compile(r"</?[A-Za-z][^>]*>|&(?:nbsp|amp|lt|gt|quot|apos|#\d+);")
 RESOURCE_KEY = re.compile(r"\b[a-z][a-z0-9_]*(?:\.[a-z0-9_]+){2,}\b")
 TOP_LEVEL_DOMAINS = {"com", "org", "net", "io", "dev", "app", "edu", "gov", "co", "uk", "es", "de", "fr", "it"}
+
+# Focus that moves this soon after an activation was moved by the app, not by a swipe.
+FOCUS_AFTER_ACTION_MS = 1000
 
 # WCAG 2.5.8 asks for 24x24 CSS px; Android's guideline is 48dp. One dp is one CSS px.
 WCAG_TARGET_DP = 24
@@ -226,6 +233,18 @@ def raw_text(text):
     return None
 
 
+def normalized(text):
+    return " ".join(text.split()).casefold()
+
+
+def was_spoken(text, spoken):
+    """Whether TalkBack said the text, allowing for a different prefix or line breaks: some fragment
+    (a line or what follows a "Sender:" prefix) of at least 12 characters starts in the speech."""
+    fragments = [normalized(f) for f in re.split(r"[\n:]", text)]
+    long_ones = [f for f in fragments if len(f) >= 12]
+    return any(f[:40] in spoken for f in long_ones) if long_ones else normalized(text) in spoken
+
+
 def descendants(tree, i):
     """The nodes dumped inside tree[i], in tree order."""
     for other in tree[i + 1:]:
@@ -274,24 +293,64 @@ def build_timeline(focuses, speeches):
     return timeline
 
 
-def last_tree(records):
-    """Nodes and package of the last dump: the one taken when the walk ended, on the screen walked."""
-    begins = [i for i, r in enumerate(records) if r["kind"] == "tree" and r.get("marker", "").startswith("begin")]
-    if not begins:
-        return [], None
-    start = begins[-1]
-    nodes = []
-    for r in records[start + 1:]:
-        if r["kind"] == "tree":
-            if "marker" in r:
+def dumps(records):
+    """Each `[tree]` dump as (fields of its begin marker, nodes), in log order."""
+    result, current = [], None
+    for r in records:
+        if r["kind"] != "tree":
+            continue
+        marker = r.get("marker", "")
+        if marker.startswith("begin"):
+            current = (parse_fields(marker[len("begin"):]), [])
+            result.append(current)
+        elif marker:
+            current = None
+        elif current is not None:
+            current[1].append(r)
+    return result
+
+
+def list_problems(tree):
+    """Collections whose items don't match what they declare. Scrollable ones are skipped: a lazy list
+    declares every item but only the visible ones are in the tree."""
+    for i, node in enumerate(tree):
+        m = re.fullmatch(r"(-?\d+)x(-?\d+)", node.get("collection", ""))
+        if not m or "scrollable" in node["flags"]:
+            continue
+        rows, cols = int(m.group(1)), int(m.group(2))
+        inside = list(descendants(tree, i))
+        items = [n for n in inside if "item" in n]
+        loose = [n for n in inside if "clickable" in n["flags"] and "item" not in n]
+        problems = []
+        if min(rows, cols) == 1 and rows * cols != len(items):
+            problems.append(f"declares {rows * cols} items, {len(items)} carry item info")
+        if loose and items:
+            problems.append(f"{len(loose)} clickable inside without item info: " + ", ".join(repr(label(n) or n.get("id")) for n in loose))
+        elif loose:
+            problems.append(f"no child carries item info ({len(loose)} clickable inside)")
+        if problems:
+            yield node, "; ".join(problems)
+
+
+def focus_moves_after_action(records, app_pkg):
+    """Each activation in the app followed within FOCUS_AFTER_ACTION_MS by focus on another element,
+    with no window change in between (a new screen or dialog takes focus legitimately)."""
+    for i, r in enumerate(records):
+        if r["kind"] != "click" or r.get("pkg") != app_pkg:
+            continue
+        for later in records[i + 1:]:
+            if later["t"] - r["t"] > FOCUS_AFTER_ACTION_MS or later["kind"] in ("window", "click"):
                 break
-            nodes.append(r)
-    marker = records[start]["marker"]
-    return nodes, marker.split("pkg=", 1)[1] if "pkg=" in marker else None
+            if later["kind"] == "focus":
+                if element_key(later) != element_key(r):
+                    yield r, later
+                break
 
 
 def run_rules(records):
-    tree, tree_pkg = last_tree(records)
+    all_dumps = dumps(records)
+    first_dump, last_dump = (all_dumps[0], all_dumps[-1]) if all_dumps else (({}, []), ({}, []))
+    tree, tree_pkg = last_dump[1], last_dump[0].get("pkg")
     all_focuses = [r for r in records if r["kind"] == "focus"]
     # The audited app is the dumped one; without a dump, the most focused package. Everything else
     # (keyboard, system UI) only delimits the timeline.
@@ -390,6 +449,38 @@ def run_rules(records):
                         cur["t"],
                     ))
 
+    for node, detail in list_problems(tree):
+        findings.append(finding("LIST_SEMANTICS", "tree", node, detail, node["t"]))
+
+    for click, focus in focus_moves_after_action(records, app_pkg):
+        jump = ""
+        if isinstance(click.get("bounds"), list) and isinstance(focus.get("bounds"), list) and px_per_dp:
+            jump = f", {round((click['bounds'][1] - focus['bounds'][1]) / px_per_dp)}dp above"
+        findings.append(finding(
+            "FOCUS_MOVED_AFTER_ACTION", "focus", focus,
+            f"after activating {label(click) or click.get('id')!r}, focus moved to {label(focus) or focus.get('id')!r}{jump}",
+            focus["t"],
+        ))
+
+    # Titles TalkBack can announce for the screen: the window's, the panes' and window-change texts.
+    app_dumps = [(fields, nodes) for fields, nodes in all_dumps if fields.get("pkg") == app_pkg]
+    titles = sorted(
+        {fields["window"] for fields, _ in app_dumps if fields.get("window")}
+        | {n["pane"] for _, nodes in app_dumps for n in nodes if n.get("pane")}
+        | {r["text"] for r in records if r["kind"] == "window" and r.get("pkg") == app_pkg and r.get("text")}
+    )
+    if any("window" in fields for fields, _ in app_dumps) and not titles:
+        findings.append(finding("SCREEN_TITLE", "tree", detail="no window title, pane title or window-change text"))
+
+    # New text on screen that was never spoken or focused: a status message TalkBack may have missed.
+    spoken = normalized(" ".join(r["text"] for r in records if r["kind"] in ("speech", "announce") and r.get("text")))
+    focused = {label(f) for f in focuses}
+    before = {label(n) for n in first_dump[1]} if first_dump is not last_dump else set()
+    appeared = sorted({
+        label(n) for n in tree
+        if label(n) and label(n) not in before and label(n) not in focused and not was_spoken(label(n), spoken)
+    }) if first_dump is not last_dump else []
+
     nodes = tree or focuses
     if nodes and not any("heading" in n["flags"] for n in nodes):
         findings.append(finding("NO_HEADING", "tree" if tree else "focus", detail="no node marked as heading"))
@@ -419,6 +510,8 @@ def run_rules(records):
             c: {"name": WCAG[c][0], "level": WCAG[c][1], **counts} for c, counts in sorted(by_wcag.items())
         },
         "findings": findings,
+        "titles": titles,
+        "appeared": appeared,
         "timeline": timeline,
         "tree": tree,
     }

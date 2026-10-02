@@ -7,13 +7,15 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Rect
 import android.os.Build
+import android.view.View
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import kotlin.math.roundToInt
 
 /**
  * Runs next to TalkBack and logs, as records interleaved with [SpeechLoggerService]'s `[speech]`:
- * - `[focus]` every node that receives accessibility focus,
+ * - `[focus]` every node that receives accessibility focus, `[input]` every node that receives input focus,
+ * - `[click]` every node activated,
  * - `[window]` window and pane changes, `[announce]` announcements,
  * - `[tree]` the active window's node tree, on `adb shell am broadcast -a <ACTION_DUMP>`.
  */
@@ -41,6 +43,10 @@ class FocusLoggerService : AccessibilityService() {
         when (event.eventType) {
             AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED ->
                 event.source?.let { logA11y("focus", "pkg=${it.packageName} ${it.describe()}") }
+            AccessibilityEvent.TYPE_VIEW_FOCUSED ->
+                event.source?.let { logA11y("input", "pkg=${it.packageName} ${it.describe()}") }
+            AccessibilityEvent.TYPE_VIEW_CLICKED ->
+                event.source?.let { logA11y("click", "pkg=${it.packageName} ${it.describe()}") }
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ->
                 logA11y("window", "pkg=${event.packageName} class=${event.className} text=${event.joinedText()}")
             AccessibilityEvent.TYPE_ANNOUNCEMENT ->
@@ -55,7 +61,9 @@ class FocusLoggerService : AccessibilityService() {
     /** Logs the active window in tree order (not TalkBack's traversal order), skipping inert containers. */
     private fun dumpTree() {
         val root = rootInActiveWindow ?: return logA11y("tree", "no active window")
-        logA11y("tree", "begin pkg=${root.packageName}")
+        // Always written, empty when the window has no title, so a missing title is told from an older log.
+        val title = windows.firstOrNull { it.isActive }?.title ?: ""
+        logA11y("tree", "begin pkg=${root.packageName} window=${title.quoted()}")
         var count = 0
         fun visit(node: AccessibilityNodeInfo, depth: Int) {
             if (!node.isVisibleToUser) return
@@ -70,9 +78,15 @@ class FocusLoggerService : AccessibilityService() {
         logA11y("tree", "end nodes=$count")
     }
 
+    /**
+     * Nodes that carry something TalkBack reads or acts on. Includes nodes that only carry a role: Compose
+     * puts the role of a node with children of its own on such a child, and TalkBack reads it as content.
+     */
     private fun AccessibilityNodeInfo.isWorthLogging(): Boolean =
         viewIdResourceName != null || !text.isNullOrEmpty() || !contentDescription.isNullOrEmpty() ||
-            isClickable || isLongClickable || isFocusable || isCheckable
+            isClickable || isLongClickable || isFocusable || isCheckable ||
+            className?.toString() in ROLE_CLASSES || !extras.getCharSequence(EXTRA_ROLE_DESCRIPTION).isNullOrEmpty() ||
+            collectionInfo != null || paneTitleOrNull() != null || liveRegion != View.ACCESSIBILITY_LIVE_REGION_NONE
 
     private fun AccessibilityNodeInfo.describe(): String {
         val bounds = Rect().also(::getBoundsInScreen)
@@ -98,9 +112,16 @@ class FocusLoggerService : AccessibilityService() {
             hintTextOrNull()?.let { "hint=${it.quoted()}" },
             error?.let { "error=${it.quoted()}" },
             if (isCheckable) "checked=$isChecked" else null,
+            expandedOrNull()?.let { "expanded=$it" },
+            "required".takeIf { Build.VERSION.SDK_INT >= 36 && isFieldRequired },
             "heading".takeIf { Build.VERSION.SDK_INT >= 28 && isHeading },
             "selected".takeIf { isSelected },
             "disabled".takeIf { !isEnabled },
+            paneTitleOrNull()?.let { "pane=${it.quoted()}" },
+            LIVE_REGIONS[liveRegion]?.let { "live=$it" },
+            collectionInfo?.let { "collection=${it.rowCount}x${it.columnCount}" },
+            collectionItemInfo?.let { "item=${it.rowIndex},${it.columnIndex}" },
+            "scrollable".takeIf { isScrollable },
             "clickable".takeIf { isClickable },
             "longclickable".takeIf { isLongClickable },
             actionList.mapNotNull { it.label }.takeIf { it.isNotEmpty() }
@@ -143,10 +164,31 @@ class FocusLoggerService : AccessibilityService() {
     private fun AccessibilityNodeInfo.hintTextOrNull(): CharSequence? =
         if (Build.VERSION.SDK_INT >= 26) hintText else null
 
+    private fun AccessibilityNodeInfo.paneTitleOrNull(): CharSequence? =
+        if (Build.VERSION.SDK_INT >= 28) paneTitle?.takeIf { it.isNotEmpty() } else null
+
+    private fun AccessibilityNodeInfo.expandedOrNull(): String? =
+        if (Build.VERSION.SDK_INT >= 36) EXPANDED_STATES[expandedState] else null
+
     companion object {
         const val ACTION_DUMP = "io.github.asanre.a11ylogger.DUMP"
         private const val EXTRA_ROLE_DESCRIPTION = "AccessibilityNodeInfo.roleDescription"
         private const val MIN_TOUCH_TARGET_DP = 48
         private const val EDIT_TEXT_CLASS = "android.widget.EditText"
+        private val ROLE_CLASSES = setOf(
+            "android.widget.Button", "android.widget.ImageButton", "android.widget.CheckBox",
+            "android.widget.RadioButton", "android.widget.Switch", "android.widget.ToggleButton",
+            "android.widget.Spinner", "android.widget.SeekBar", "android.widget.ProgressBar",
+            "android.widget.ImageView", EDIT_TEXT_CLASS,
+        )
+        private val LIVE_REGIONS = mapOf(
+            View.ACCESSIBILITY_LIVE_REGION_POLITE to "polite",
+            View.ACCESSIBILITY_LIVE_REGION_ASSERTIVE to "assertive",
+        )
+        private val EXPANDED_STATES = mapOf(
+            AccessibilityNodeInfo.EXPANDED_STATE_COLLAPSED to "collapsed",
+            AccessibilityNodeInfo.EXPANDED_STATE_PARTIAL to "partial",
+            AccessibilityNodeInfo.EXPANDED_STATE_FULL to "full",
+        )
     }
 }

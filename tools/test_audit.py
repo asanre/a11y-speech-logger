@@ -15,10 +15,11 @@ def run(*lines):
     return audit.run_rules([r for r in records if r])
 
 
-def tree(*nodes):
-    """A dump of the app's window; each node is `(depth, fields)`."""
+def tree(*nodes, window=None):
+    """A dump of the app's window; each node is `(depth, fields)`. `window` writes the newer begin marker."""
+    title = f' window="{window}"' if window is not None else ""
     return (
-        [f"[tree] t=1 begin pkg={PKG}"]
+        [f"[tree] t=1 begin pkg={PKG}{title}"]
         + [f"[tree] t=2 {'  ' * depth}{fields}" for depth, fields in nodes]
         + ["[tree] t=3 end nodes=0"]
     )
@@ -138,6 +139,74 @@ class RawTextTest(unittest.TestCase):
         self.assertIsNone(audit.raw_text("Visit shop.example.com today"))
         self.assertIsNone(audit.raw_text("Price 1.299,99 €"))
         self.assertIsNone(audit.raw_text("Rock & roll"))
+
+
+class StructureTest(unittest.TestCase):
+
+    def test_list_declaring_fewer_items_than_it_shows(self):
+        result = run(*tree(
+            (1, "id=options class=View collection=2x1 bounds=[0,0][400,300] size=200x150dp"),
+            (2, "id=- class=Button text=\"A\" item=0,0 clickable bounds=[0,0][400,96] size=200x48dp"),
+            (2, "id=- class=Button text=\"B\" item=1,0 clickable bounds=[0,100][400,196] size=200x48dp"),
+            (2, "id=- class=Button text=\"C\" clickable bounds=[0,200][400,296] size=200x48dp"),
+        ))
+        [f] = rules(result, "LIST_SEMANTICS")
+        self.assertIn("'C'", f["detail"])
+
+    def test_scrollable_list_is_skipped(self):
+        result = run(*tree(
+            (1, "id=feed class=View collection=50x1 scrollable bounds=[0,0][400,300] size=200x150dp"),
+            (2, "id=- class=Button text=\"A\" item=0,0 clickable bounds=[0,0][400,96] size=200x48dp"),
+        ))
+        self.assertEqual(rules(result, "LIST_SEMANTICS"), [])
+
+    def test_screen_without_any_title(self):
+        result = run(*tree((1, "id=a class=TextView text=\"Hi\" heading bounds=[0,0][96,96] size=48x48dp"), window=""))
+        self.assertEqual(len(rules(result, "SCREEN_TITLE")), 1)
+
+    def test_pane_title_counts_as_title(self):
+        result = run(*tree((1, "id=a class=View pane=\"Chat\" bounds=[0,0][96,96] size=48x48dp"), window=""))
+        self.assertEqual(rules(result, "SCREEN_TITLE"), [])
+        self.assertEqual(result["titles"], ["Chat"])
+
+    def test_older_log_without_window_field_is_not_judged(self):
+        result = run(*tree((1, "id=a class=TextView text=\"Hi\" bounds=[0,0][96,96] size=48x48dp")))
+        self.assertEqual(rules(result, "SCREEN_TITLE"), [])
+
+    def test_focus_moved_by_the_app_after_activation(self):
+        result = run(
+            *tree((1, "id=opt class=Button text=\"Shipping\" clickable bounds=[0,800][400,896] size=200x48dp"), window="Chat"),
+            f"[focus] t=10 pkg={PKG} id=opt class=Button text=\"Shipping\" clickable bounds=[0,800][400,896] size=200x48dp",
+            f"[click] t=500 pkg={PKG} id=opt class=Button text=\"Shipping\" clickable bounds=[0,800][400,896] size=200x48dp",
+            f"[focus] t=900 pkg={PKG} id=close class=Button desc=\"Close\" clickable bounds=[0,0][96,96] size=48x48dp",
+        )
+        [f] = rules(result, "FOCUS_MOVED_AFTER_ACTION")
+        self.assertIn("'Close'", f["detail"])
+        self.assertIn("400dp above", f["detail"])
+
+    def test_new_window_after_activation_is_expected(self):
+        result = run(
+            f"[click] t=500 pkg={PKG} id=opt class=Button text=\"Open\" clickable bounds=[0,800][400,896] size=200x48dp",
+            f"[window] t=600 pkg={PKG} class=android.app.Dialog text=\"Details\"",
+            f"[focus] t=900 pkg={PKG} id=close class=Button desc=\"Close\" clickable bounds=[0,0][96,96] size=48x48dp",
+        )
+        self.assertEqual(rules(result, "FOCUS_MOVED_AFTER_ACTION"), [])
+
+    def test_text_that_appeared_without_being_spoken(self):
+        lines = (
+            tree((1, "id=a class=TextView text=\"Hi\" bounds=[0,0][96,96] size=48x48dp"), window="Chat")
+            + tree(
+                (1, "id=a class=TextView text=\"Hi\" bounds=[0,0][96,96] size=48x48dp"),
+                (1, "id=b class=TextView text=\"Your order is ready\" bounds=[0,100][96,196] size=48x48dp"),
+                window="Chat",
+            )
+        )
+        self.assertEqual(run(*lines)["appeared"], ["Your order is ready"])
+        spoken = run(*lines, "[speech] t=50 \"your order  is ready\"")
+        self.assertEqual(spoken["appeared"], [])
+
+    def test_spoken_without_the_sender_prefix(self):
+        self.assertTrue(audit.was_spoken("Bot: Here are the delivery options", audit.normalized("Here are the delivery options")))
 
 
 if __name__ == "__main__":
