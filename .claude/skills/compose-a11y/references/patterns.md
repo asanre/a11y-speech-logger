@@ -3,7 +3,7 @@
 How to read this file:
 
 - **Expected speech** is written as "name, role, state". TalkBack's actual order and wording depend on its version and verbosity settings (the official docs quote a Switch as "On; Switch; double tap to toggle"), so compare the parts, not the order. Hints such as "Double tap to activate" are left out unless they matter.
-- **Test assertion** uses APIs from the official docs: finders (`onNodeWithText`, `onNodeWithContentDescription`, `onNode`, `onAllNodes`), matchers (`hasText`, `hasClickAction`, `SemanticsMatcher.expectValue`), `assertIsOff`, `assertCountEquals`, `assertIsDisplayed`. A **†** marks a name (a `SemanticsProperties` key other than `Role`, a `Role` value or a convenience assertion) that is not spelled out in the fetched docs: confirm it against `composeTestRule.onRoot(useUnmergedTree = true).printToLog("TAG")` before relying on it.
+- **Test assertion** uses APIs from the official docs: finders (`onNodeWithText`, `onNodeWithContentDescription`, `onNode`, `onAllNodes`), matchers (`hasText`, `hasClickAction`, `SemanticsMatcher.expectValue`), `assertIsOff`, `assertCountEquals`, `assertIsDisplayed`. Names not spelled out in the guides (`SemanticsProperties` keys, `Role` values, `assertIsSelected`, `keyIsDefined`, the exposed dropdown APIs) were checked against Compose UI 1.9, ui-test 1.12 and Material 3 1.4.
 - Add `composeTestRule.enableAccessibilityChecks()` to the same tests to catch missing labels, small targets and low contrast.
 
 ---
@@ -93,7 +93,7 @@ PrimaryTabRow(selectedTabIndex = selected) {
 // Custom tabs: group them, and make each one selectable with a tab role
 Row(Modifier.selectableGroup()) {
     tabs.forEachIndexed { index, tab ->
-        Box(Modifier.selectable(selected = index == selected, onClick = { selected = index }, role = Role.Tab /* † */)) {
+        Box(Modifier.selectable(selected = index == selected, onClick = { selected = index }, role = Role.Tab)) {
             Text(tab.label)
         }
     }
@@ -108,8 +108,8 @@ Row(Modifier.selectableGroup()) {
 **Test assertion**
 ```kotlin
 composeTestRule.onNodeWithText("Songs")
-    .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)) // † Role.Tab
-    .assert(SemanticsMatcher.expectValue(SemanticsProperties.Selected, true)) // † key; shorthand assertIsSelected() †
+    .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab))
+    .assert(SemanticsMatcher.expectValue(SemanticsProperties.Selected, true)) // or assertIsSelected()
 ```
 
 **WCAG 2.2:** 4.1.2, 1.3.1.
@@ -185,7 +185,7 @@ FilterChip(
 **Test assertion**
 ```kotlin
 composeTestRule.onNodeWithText("Vegetarian").performClick()
-    .assert(SemanticsMatcher.expectValue(SemanticsProperties.Selected, true)) // † key
+    .assert(SemanticsMatcher.expectValue(SemanticsProperties.Selected, true))
 ```
 
 **WCAG 2.2:** 4.1.2, 1.1.1.
@@ -223,7 +223,7 @@ Card(
 **Test assertion**
 ```kotlin
 composeTestRule.onAllNodes(hasClickAction()).assertCountEquals(1) // one actionable node per card
-composeTestRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.CustomActions)).assertExists() // † names
+composeTestRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.CustomActions)).assertExists()
 ```
 
 **WCAG 2.2:** 4.1.2, 1.3.1, 2.1.1.
@@ -256,7 +256,7 @@ The docs show `collectionInfo` on custom lists and tell you to set `collectionIt
 
 **Test assertion**
 ```kotlin
-composeTestRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.CollectionInfo)).assertExists() // † names
+composeTestRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.CollectionInfo)).assertExists()
 ```
 
 **WCAG 2.2:** 1.3.1, 4.1.2.
@@ -269,15 +269,15 @@ composeTestRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.Collect
 
 **Compose code**
 ```kotlin
-ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) { // † onExpandedChange
+ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
     OutlinedTextField(
         value = size,
         onValueChange = {},
-        readOnly = true, // †
+        readOnly = true,
         label = { Text("Size") },
-        modifier = Modifier.menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable), // † value name
+        modifier = Modifier.menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable),
     )
-    ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) { // †
+    ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
         sizes.forEach { option ->
             DropdownMenuItem(text = { Text(option) }, onClick = { size = option; expanded = false })
         }
@@ -324,7 +324,7 @@ A semantics property for "required" is not in the official docs: say it in the v
 
 **Test assertion**
 ```kotlin
-composeTestRule.onNode(SemanticsMatcher.expectValue(SemanticsProperties.Error, errorText)).assertExists() // † key
+composeTestRule.onNode(SemanticsMatcher.expectValue(SemanticsProperties.Error, errorText)).assertExists()
 ```
 
 **WCAG 2.2:** 1.3.1, 3.3.1, 3.3.2, 4.1.2.
@@ -357,7 +357,7 @@ Pane titles must be unique across the app: TalkBack uses them as identifiers.
 
 **Test assertion**
 ```kotlin
-composeTestRule.onNode(SemanticsMatcher.expectValue(SemanticsProperties.PaneTitle, "Share photo")).assertExists() // † key
+composeTestRule.onNode(SemanticsMatcher.expectValue(SemanticsProperties.PaneTitle, "Share photo")).assertExists()
 composeTestRule.onNodeWithText("Delete draft?").assertIsDisplayed()
 ```
 
@@ -386,7 +386,7 @@ For a pane that changes inside the same window, use `Modifier.semantics { paneTi
 **Test assertion**
 ```kotlin
 composeTestRule.onNodeWithText("Checkout")
-    .assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading)) // † names
+    .assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading))
 ```
 
 **WCAG 2.2:** 2.4.2, 1.3.1.
@@ -413,7 +413,7 @@ Keep the live-region node in composition and change its content: accessibility s
 
 **Test assertion**
 ```kotlin
-composeTestRule.onNode(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite)) // † key
+composeTestRule.onNode(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite))
     .assertTextEquals("12 results")
 ```
 
@@ -438,7 +438,7 @@ Text("Shipping address", style = MaterialTheme.typography.headlineSmall, modifie
 **Test assertion**
 ```kotlin
 composeTestRule.onNodeWithText("Shipping address")
-    .assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading)) // † names
+    .assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading))
 ```
 
 **WCAG 2.2:** 1.3.1, 2.4.6.
@@ -531,7 +531,7 @@ LaunchedEffect(restoreFocus) {
 **Test assertion**
 ```kotlin
 composeTestRule.onNodeWithText("Cancel").performClick()
-composeTestRule.onNodeWithText("Filters").assert(SemanticsMatcher.expectValue(SemanticsProperties.Focused, true)) // † key
+composeTestRule.onNodeWithText("Filters").assert(SemanticsMatcher.expectValue(SemanticsProperties.Focused, true))
 ```
 
 **WCAG 2.2:** 2.4.3.
