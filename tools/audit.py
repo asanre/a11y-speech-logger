@@ -207,6 +207,15 @@ def label(node):
     return (node.get("text") or node.get("desc") or "").strip()
 
 
+def name_or_place(node):
+    """How to point at an element in a detail: its label, its id, or its class and bounds."""
+    if label(node) or node.get("id") not in (None, "-"):
+        return repr(label(node) or node["id"])
+    bounds = node.get("bounds")
+    where = f"[{bounds[0]},{bounds[1]}][{bounds[2]},{bounds[3]}]" if isinstance(bounds, list) else "?"
+    return f"the {node.get('class')} at {where}"
+
+
 def actionable(node):
     return "clickable" in node["flags"] or "longclickable" in node["flags"]
 
@@ -374,7 +383,9 @@ def list_problems(tree):
         items = [n for n in inside if "item" in n]
         loose = [n for n in inside if "clickable" in n["flags"] and "item" not in n]
         problems = []
-        if min(rows, cols) == 1 and rows * cols != len(items):
+        if rows * cols == 1:
+            problems.append("a list of a single item: TalkBack announces a list with nothing to move through")
+        elif min(rows, cols) == 1 and rows * cols != len(items):
             problems.append(f"declares {rows * cols} items, {len(items)} carry item info")
         if loose and items:
             problems.append(f"{len(loose)} clickable inside without item info: " + ", ".join(repr(label(n) or n.get("id")) for n in loose))
@@ -386,12 +397,15 @@ def list_problems(tree):
 
 def focus_moves_after_action(records, app_pkg):
     """Each activation in the app followed within FOCUS_AFTER_ACTION_MS by focus on another element,
-    with no window change in between (a new screen or dialog takes focus legitimately)."""
+    with no window change of the app in between (a new screen or dialog takes focus legitimately; the
+    keyboard opening doesn't)."""
     for i, r in enumerate(records):
         if r["kind"] != "click" or r.get("pkg") != app_pkg:
             continue
         for later in records[i + 1:]:
-            if later["t"] - r["t"] > FOCUS_AFTER_ACTION_MS or later["kind"] in ("window", "click"):
+            if later["t"] - r["t"] > FOCUS_AFTER_ACTION_MS or later["kind"] == "click":
+                break
+            if later["kind"] == "window" and later.get("pkg") == app_pkg:
                 break
             if later["kind"] == "focus":
                 if element_key(later) != element_key(r):
@@ -524,10 +538,11 @@ def run_rules(records, screenshot=None):
     for click, focus in focus_moves_after_action(records, app_pkg):
         jump = ""
         if isinstance(click.get("bounds"), list) and isinstance(focus.get("bounds"), list) and px_per_dp:
-            jump = f", {round((click['bounds'][1] - focus['bounds'][1]) / px_per_dp)}dp above"
+            dp = round((click["bounds"][1] - focus["bounds"][1]) / px_per_dp)
+            jump = f", {abs(dp)}dp {'above' if dp >= 0 else 'below'}"
         findings.append(finding(
             "FOCUS_MOVED_AFTER_ACTION", "focus", focus,
-            f"after activating {label(click) or click.get('id')!r}, focus moved to {label(focus) or focus.get('id')!r}{jump}",
+            f"after activating {name_or_place(click)}, focus moved to {name_or_place(focus)}{jump}",
             focus["t"],
         ))
 

@@ -171,6 +171,16 @@ class StructureTest(unittest.TestCase):
         ))
         self.assertEqual(rules(result, "LIST_SEMANTICS"), [])
 
+    def test_single_item_list_is_reported_as_such(self):
+        """A one-image pager inside a card: TalkBack says "List" in the card's speech for nothing to navigate."""
+        result = run(*tree(
+            (1, "id=- class=View clickable bounds=[0,0][400,500] size=200x250dp"),
+            (2, "id=- class=View collection=1x1 bounds=[0,0][400,300] size=200x150dp"),
+            (3, "id=image class=View bounds=[0,0][400,300] size=200x150dp"),
+        ))
+        [f] = rules(result, "LIST_SEMANTICS")
+        self.assertIn("single item", f["detail"])
+
     def test_screen_without_any_title(self):
         result = run(*tree((1, "id=a class=TextView text=\"Hi\" heading bounds=[0,0][96,96] size=48x48dp"), window=""))
         self.assertEqual(len(rules(result, "SCREEN_TITLE")), 1)
@@ -194,6 +204,19 @@ class StructureTest(unittest.TestCase):
         [f] = rules(result, "FOCUS_MOVED_AFTER_ACTION")
         self.assertIn("'Close'", f["detail"])
         self.assertIn("400dp above", f["detail"])
+
+    def test_keyboard_opening_after_activation_still_counts(self):
+        """The keyboard is another app's window: it doesn't make the focus move legitimate."""
+        result = run(
+            *tree((1, "id=- class=View clickable bounds=[0,800][400,896] size=200x48dp"), window="Chat"),
+            f"[click] t=500 pkg={PKG} id=- class=View clickable bounds=[0,800][400,896] size=200x48dp",
+            "[window] t=600 pkg=com.example.keyboard class=android.inputmethodservice.SoftInputWindow text=\"\"",
+            f"[focus] t=700 pkg={PKG} id=- class=EditText text=\"\" clickable bounds=[0,900][400,996] size=200x48dp",
+        )
+        [f] = rules(result, "FOCUS_MOVED_AFTER_ACTION")
+        self.assertIn("View at [0,800][400,896]", f["detail"])
+        self.assertIn("EditText at [0,900][400,996]", f["detail"])
+        self.assertIn("50dp below", f["detail"])
 
     def test_new_window_after_activation_is_expected(self):
         result = run(
