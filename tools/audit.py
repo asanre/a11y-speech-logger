@@ -5,7 +5,8 @@
       Clears logcat, dumps the node tree and takes a screenshot (screen-start.png), shows
       focus and speech live while you walk the screen with TalkBack, dumps and screenshots
       again when you press Enter (screen-end.png), runs the Accessibility Test Framework checks on
-      that last dump, then saves session.txt and runs `rules`.
+      that last dump, then saves session.txt and runs `rules`. A line typed before Enter is saved
+      as notes.md, for the tester's own observations.
 
   audit.py keyboard <screen> [--steps 60] [--out audits] [--serial SERIAL]
       Walks the screen with TAB, as a keyboard user without TalkBack: dumps the tree and takes a
@@ -977,13 +978,15 @@ def capture(args):
     adb(args.serial, "logcat", "-c")
     viewer = follow(args.serial)
     snapshot(args.serial, folder / "screen-start.png")
-    print(f"Walk '{args.screen}' with TalkBack, then press Enter to save.\n")
-    input()
+    print(f"Walk '{args.screen}' with TalkBack, then press Enter to save. Type a note first to keep it in notes.md.\n")
+    note = input().strip()
     viewer.terminate()
     # Dumped again because the screen can change after the capture starts (a sheet opened, a scroll).
     snapshot(args.serial, folder / "screen-end.png", atf=True)
     session = read_session(args.serial, dumps=2, atf=True)
     (folder / "session.txt").write_text(session, encoding="utf-8")
+    if note:
+        (folder / "notes.md").write_text(note + "\n", encoding="utf-8")
     print(f"saved {folder}")
     rules(argparse.Namespace(dir=folder))
 
