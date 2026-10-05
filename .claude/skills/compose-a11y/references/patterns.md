@@ -62,10 +62,20 @@ Text(
     }
 )
 ```
-Pass a listener lambda to `LinkAnnotation.Url(...) { }` to run custom code on click.
+Pass a listener lambda to `LinkAnnotation.Url(...) { }` to run custom code on click. For a link with no URL, one that opens something in the app, use `LinkAnnotation.Clickable`:
+```kotlin
+withLink(
+    LinkAnnotation.Clickable(
+        tag = "ai_info",
+        styles = TextLinkStyles(style = SpanStyle(textDecoration = TextDecoration.Underline)),
+        linkInteractionListener = { onOpenInfo() },
+    )
+) { append("how the assistant works") }
+```
 
 **Anti-patterns**
 - `Text(modifier = Modifier.clickable { open(url) })` for a sentence with one link: the whole sentence is one control, and the link target is unclear.
+- `ClickableText` (deprecated): it handles taps on offsets with no link semantics, so TalkBack and the keyboard can't reach the link.
 - Link text "Click here" or "More": meaningless when read out of context.
 - Link marked only by color: invisible to users who can't tell the colors apart. Add a non-color cue too, such as an underline.
 
@@ -219,11 +229,12 @@ Card(
 - A `clickable` card with a nested `IconButton`: the button defies the merge and becomes an extra stop, often unnamed.
 - A clickable on the image, another on the title and another on the price: three stops that open the same thing.
 - `clearAndSetSemantics { }` on the whole card: nothing is read.
+- `customActions` on a layout inside the card (a `Column`) instead of the clickable node: TalkBack focuses the clickable node and only offers its actions, so the action can't be reached at all.
 
 **Test assertion**
 ```kotlin
 composeTestRule.onAllNodes(hasClickAction()).assertCountEquals(1) // one actionable node per card
-composeTestRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.CustomActions)).assertExists()
+composeTestRule.onNode(hasClickAction() and SemanticsMatcher.keyIsDefined(SemanticsActions.CustomActions)).assertExists()
 ```
 
 **WCAG 2.2:** 4.1.2, 1.3.1, 2.1.1.

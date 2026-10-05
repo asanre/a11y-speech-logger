@@ -69,7 +69,8 @@ python3 tools/audit.py rules audits/2026-10-01/checkout   # re-run the rules on 
 `capture` warns you if the engine or the service isn't active. While you walk the screen it prints
 each focus and what TalkBack says, one short line each, since TalkBack itself is silent. It writes
 `audits/<date>/<screen>/` with `session.txt`, `screen-start.png`, `screen-end.png` and
-`findings.json`. The tree is dumped at the start and again when you press Enter, because the screen
+`findings.json`, plus `notes.md` if you type a line before pressing Enter: what you tried and couldn't
+do, which the log doesn't show. The tree is dumped at the start and again when you press Enter, because the screen
 can change in between (a sheet opens, a list scrolls). The rules use the last dump, and only the
 focus of the app in that dump: the keyboard and the system UI are left out. On the last dump the
 service also runs ATF; its contrast checks need a screenshot, which an accessibility service can only
@@ -126,7 +127,7 @@ One record per line: `[kind] t=<ms> <fields>`.
 | `[input]` | input focus (keyboard) | `pkg` plus node fields |
 | `[click]` | activation | `pkg` plus node fields |
 | `[tree]` | `DUMP` broadcast | `begin pkg=… window="…"` (the window title, empty if none), one indented node per line (`FOCUSED` marks accessibility focus, `INPUT_FOCUSED` input focus), `end nodes=N` |
-| `[atf]` | `DUMP` with `--ez atf true` | `check`, `type` (`ERROR` or `WARNING`), `id`, `class`, `bounds`, `msg`; then `end results=N`, with `skipped=contrast reason="…"` or `error="…"` when it applies |
+| `[atf]` | `DUMP` with `--ez atf true` | `check`, `type` (`ERROR` or `WARNING`), `id`, `class`, `bounds`, `msg`; then `end results=N`, with `skipped=contrast reason="…"` or `error="…"` when it applies. Without `skipped`, every check ran, contrast included |
 
 Node fields, present only when they apply:
 - **Identity**: `id` (`-` if none), `class`, `text`, `desc`, `role`.
@@ -153,7 +154,8 @@ All of them are evidence to verify, not verdicts. The `a11y-audit` skill confirm
 | `EDIT_NO_HINT` | APK | 3.3.2, 4.1.2 | failure | Empty `EditText` without a hint, e.g. a placeholder drawn as a separate text |
 | `SMALL_TARGET` | APK | 2.5.8 | failure below 24dp, advisory up to 48dp | Actionable and smaller than 48dp on one side. WCAG asks for 24dp; 48dp is Android's guideline |
 | `LABEL_IN_CHILD` | APK | 4.1.2 | advisory | Actionable without its own label; the only label is the content description of a non-actionable descendant (an icon button with the description on the icon). TalkBack often reads it fine; other services may not |
-| `SILENT_FOCUS` | `audit.py` | 4.1.2 | failure | An element got focus and TalkBack said nothing for 1.5 s |
+| `SILENT_FOCUS` | `audit.py` | 4.1.2 | failure | TalkBack said nothing on any focus of an element, and it was focused twice or for 1.5 s: a single quick swipe past can beat the speech |
+| `UNREACHABLE_ACTIONS` | `audit.py` | 4.1.2 | failure | Actions (custom actions, e.g. "Add to bag") on a node that isn't actionable, inside a clickable one. TalkBack focuses the clickable node and only offers that node's actions |
 | `NO_ROLE` | `audit.py` | 4.1.2 | failure, or advisory if the role is on a descendant | Clickable or checkable with a generic class (`View`, `*Layout`…) and no role, so nothing says what it is or that it can be activated |
 | `CONFLICTING_STATE` | `audit.py` | 4.1.2 | failure | The same node is checkable and selected, and TalkBack reads both states |
 | `RAW_TEXT_SPOKEN` | `audit.py` | 1.1.1, 4.1.2 | failure | Markup (`<br>`, `&nbsp;`) or a resource key (`screen.title.label`) in the text or the speech |
@@ -162,7 +164,7 @@ All of them are evidence to verify, not verdicts. The `a11y-audit` skill confirm
 | `FOCUS_NOT_VISIBLE` | `keyboard` | 2.4.7 | failure | Nothing changes on screen around the element that gets keyboard focus, or TAB stops on something the accessibility tree doesn't expose and nothing changes at all |
 | `STALE_FOCUS_INDICATOR` | `keyboard` | 2.4.7 | failure | The focus indicator stays drawn on an element after focus moved on, so two elements look focused |
 | `KEYBOARD_UNREACHABLE` | `keyboard` | 2.1.1 (2.1.2 if stuck) | failure | An actionable element that TAB never reaches, or that gets focus and loses it right away (focus reset) |
-| `NESTED_ACTIONABLE` | `audit.py` | 4.1.2, 2.4.3 | advisory | An actionable element inside another one, e.g. a favourite button inside a clickable card |
+| `NESTED_ACTIONABLE` | `audit.py` | 4.1.2, 2.4.3 | advisory | An actionable element inside another one, e.g. a favourite button inside a clickable card. Inside means deeper in the dump and within its bounds |
 | `LIST_SEMANTICS` | `audit.py` | 1.3.1 | advisory | A list whose declared item count doesn't match its items (not checked on lazy lists), a list of a single item, or clickable children without item info |
 | `FOCUS_MOVED_AFTER_ACTION` | `audit.py` | 2.4.3 | advisory | Within 1 s of an activation, focus jumped to another element; the detail says where |
 | `NO_HEADING` | `audit.py` | 1.3.1, 2.4.6 | advisory | No node on the screen is a heading. WCAG doesn't require headings; it requires visual headings to be marked |

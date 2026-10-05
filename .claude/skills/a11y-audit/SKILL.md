@@ -29,14 +29,24 @@ The criteria, what each one asks of a native screen and what evidence answers it
   - `tree`: the last node dump, which matches `screen-end.png`;
   - `titles`: the titles TalkBack can announce for the screen;
   - `appeared`: text that showed up during the walk and was never spoken or focused;
-  - `atf`: whether the Accessibility Test Framework ran on the last dump, and why contrast was skipped
-    if it was. `null` in captures taken before ATF was added;
+  - `atf`: the Accessibility Test Framework run on the last dump. `results` without `skipped` means
+    every check ran, contrast included; `skipped: contrast` with a `reason` means there was no
+    screenshot; `error` means no results. `null` in captures taken before ATF was added. Text that only
+    appeared in earlier dumps wasn't checked;
   - `keyboard` (keyboard pass only): the input-focus `sequence` and its `ending` (`cycle` or `stuck`).
+    A `null` in `sequence` is a TAB that stopped on something the tree doesn't expose.
 - **`session.txt`**: the raw log. Read it only when `findings.json` is not enough. The format is in the
   repo's README ("Log format").
 - **`screen-start.png`, `screen-end.png`**: always look at them. If the start shows another screen, the
   walk began elsewhere. Older captures have a single `screen.png`.
 - **`keyboard/step-NN.png`** (keyboard pass only): the screen after each TAB.
+- **`notes.md`**, if present: what the tester tried and couldn't do. Quote it as a *tester note*. It
+  points at a problem; the capture or the code must still show where it is.
+
+A keyboard pass is a folder of its own, with a `keyboard/` subfolder. Its `findings.json` only has
+`keyboard`, `findings` and `tree`: no timeline, titles or ATF. Audit it together with the TalkBack
+capture of the same screen (a sibling folder; ask if it isn't clear which) and write one `report.md`
+in the TalkBack capture's folder. The keyboard pass answers 2.1.1, 2.1.2, 2.4.7 and 2.4.11.
 
 ### Steps
 
@@ -48,7 +58,9 @@ The criteria, what each one asks of a native screen and what evidence answers it
    - No keyboard pass: 2.1.1, 2.1.2 and 2.4.7 are *Not tested*.
 2. **Verify every finding.** All of them are evidence to check, not verdicts. Confirm or dismiss each one
    with the timeline, the tree or the screenshot, and keep the dismissed ones with the reason.
-   - `SILENT_FOCUS`: confirm in the timeline that nothing was spoken.
+   - `SILENT_FOCUS`: confirm in the timeline that nothing was spoken on any of the element's focuses.
+   - `UNREACHABLE_ACTIONS`: confirm in the timeline that the clickable node it names gets focus and
+     carries no `actions`. Find the visible control those actions stand for in the screenshot.
    - `NO_ROLE` *failure*: no role anywhere, so TalkBack gives no hint that it can be activated.
      *Advisory*: the role is on a descendant (`detail` says which), which Compose does when the
      actionable node has children of its own. TalkBack reads it as content ("Button, Stop").
