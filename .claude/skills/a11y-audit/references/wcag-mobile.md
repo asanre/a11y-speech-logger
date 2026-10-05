@@ -2,7 +2,7 @@
 
 Every Level A and AA success criterion of [WCAG 2.2](https://www.w3.org/TR/WCAG22/), read for a native
 app the way W3C does in [WCAG2ICT](https://www.w3.org/TR/wcag2ict-22/) and in its notes on mobile.
-"Page" means a screen, "keyboard" means a hardware keyboard or switch access, and "set of pages" means the
+"Page" means a screen, "keyboard" means a hardware keyboard or a D-pad (Switch Access walks the accessibility tree instead, so it is covered by the TalkBack walk and the node rules, not by the keyboard pass), and "set of pages" means the
 screens of one app. 4.1.1 Parsing is obsolete in 2.2 and left out.
 
 **Evidence** says what answers the criterion in a capture:

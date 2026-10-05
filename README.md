@@ -76,7 +76,7 @@ service also runs ATF; its contrast checks need a screenshot, which an accessibi
 take from Android 11 (API 30). `audits/` is gitignored because it contains screenshots of the audited
 app.
 
-`keyboard` is for keyboard and switch users, so turn TalkBack off first. It presses TAB, dumps the tree
+`keyboard` is for people who use a hardware keyboard (motor disabilities, tablets with a keyboard, Chromebooks, desktop modes), so turn TalkBack off first. Switch Access doesn't use keyboard focus: it walks the accessibility tree, like TalkBack. It presses TAB, dumps the tree
 and takes a screenshot after each key (`keyboard/step-NN.png`), and stops when focus cycles back or
 stops moving. Arrow-key navigation (carousels, grids) isn't walked.
 
