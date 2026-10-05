@@ -81,6 +81,15 @@ class NodeRulesTest(unittest.TestCase):
         self.assertEqual(f["node"]["id"], "card")
         self.assertEqual(f["conformance"], "failure")
 
+    def test_checkable_without_role_is_flagged(self):
+        """An option read as "Selected, Search in Women": its state, but nothing says what it is."""
+        result = run(
+            f"[focus] t=10 pkg={PKG} id=women class=View desc=\"Search in Women\" state=\"Selected\" checked=true bounds=[0,0][96,96] size=48x48dp",
+            "[speech] t=11 Selected, Search in Women",
+        )
+        [f] = rules(result, "NO_ROLE")
+        self.assertEqual(f["conformance"], "failure")
+
     def test_role_on_a_role_only_child_is_advisory(self):
         result = run(*tree(
             (1, "id=card class=View clickable bounds=[0,0][96,96] size=48x48dp"),
@@ -154,6 +163,19 @@ class StructureTest(unittest.TestCase):
         ))
         [f] = rules(result, "LIST_SEMANTICS")
         self.assertIn("'C'", f["detail"])
+
+    def test_scrollable_list_with_items_not_marked(self):
+        """A lazy grid of cards: the count can't be checked, but its cards must still be list items."""
+        result = run(*tree(
+            (1, "id=grid class=View collection=-1x-1 scrollable bounds=[0,0][400,800] size=200x400dp"),
+            (2, "id=card_0 class=View clickable bounds=[0,0][200,400] size=100x200dp"),
+            (2, "id=card_1 class=View clickable bounds=[200,0][400,400] size=100x200dp"),
+            (2, "id=row class=View item=1,0 clickable bounds=[0,400][400,600] size=200x100dp"),
+            (3, "id=fav class=Button desc=\"Favourite\" clickable bounds=[300,400][400,500] size=50x50dp"),
+        ))
+        [f] = rules(result, "LIST_SEMANTICS")
+        self.assertIn("2 clickable inside without item info", f["detail"])
+        self.assertNotIn("Favourite", f["detail"])
 
     def test_scrollable_list_is_skipped(self):
         result = run(*tree(
@@ -308,19 +330,21 @@ class KeyboardTest(unittest.TestCase):
     B = "id=b class=Button text=\"B\" clickable bounds=[20,0][40,10] size=10x5dp"
     C = "id=c class=Button text=\"C\" clickable bounds=[0,10][20,20] size=10x5dp"
 
-    def run_pass(self, focus_per_step, ring_on=("a", "b"), extra=()):
+    def run_pass(self, focus_per_step, ring_on=("a", "b"), extra=(), ring_stays=()):
         """One dump and one screenshot per step; the focused button gets a dark ring if listed in ring_on."""
         boxes = {"a": (0, 0, 20, 10), "b": (20, 0, 40, 10), "c": (0, 10, 20, 20)}
         lines = []
         with tempfile.TemporaryDirectory() as folder:
             steps = Path(folder) / "keyboard"
             steps.mkdir()
+            drawn = set()
             for i, focused in enumerate(focus_per_step):
                 nodes = [(1, f + (" INPUT_FOCUSED" if f.startswith(f"id={focused} ") else "")) for f in (self.A, self.B, self.C)]
                 lines += tree(*nodes, window="Shop")
                 pixels = [[(255, 255, 255)] * 40 for _ in range(20)]
-                if focused in ring_on:
-                    left, top, right, bottom = boxes[focused]
+                drawn = {d for d in drawn if d in ring_stays} | ({focused} if focused in ring_on else set())
+                for ringed in drawn:
+                    left, top, right, bottom = boxes[ringed]
                     for x in range(left, right):
                         pixels[top][x] = pixels[bottom - 1][x] = (0, 0, 0)
                 write_png(steps / f"step-{i:02}.png", pixels)
@@ -348,6 +372,12 @@ class KeyboardTest(unittest.TestCase):
         result = self.run_pass([None, "a", "b", "a"], extra=[reset])
         [f] = rules(result, "KEYBOARD_UNREACHABLE")
         self.assertIn("lost it", f["detail"])
+
+    def test_indicator_left_behind(self):
+        result = self.run_pass([None, "a", "b", "c", "a"], ring_on=("a", "b", "c"), ring_stays=("a",))
+        [f] = rules(result, "STALE_FOCUS_INDICATOR")
+        self.assertEqual(f["node"]["id"], "a")
+        self.assertIn("step 2", f["detail"])
 
     def test_element_skipped_in_a_cycle(self):
         result = self.run_pass([None, "a", "b", "a"])

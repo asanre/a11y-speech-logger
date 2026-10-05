@@ -90,6 +90,7 @@ RULES = {
     "TEXT_CONTRAST": {"severity": "medium", "wcag": ["1.4.3"], "conformance": "failure"},
     "FOCUS_NOT_VISIBLE": {"severity": "high", "wcag": ["2.4.7"], "conformance": "failure"},
     "KEYBOARD_UNREACHABLE": {"severity": "high", "wcag": ["2.1.1"], "conformance": "failure"},
+    "STALE_FOCUS_INDICATOR": {"severity": "medium", "wcag": ["2.4.7"], "conformance": "failure"},
     # Accessibility Test Framework checks, as `ATF:<check>`. The conformance is that of an ERROR; a WARNING,
     # which ATF gives when it can't be sure (unknown text size, a borderline value), is always advisory.
     "ATF:SpeakableTextPresentCheck": {"severity": "high", "wcag": ["4.1.2", "1.1.1"], "conformance": "failure"},
@@ -276,7 +277,8 @@ def leading_role(utterance, roles):
 
 def lacks_role(node):
     cls = node.get("class") or ""
-    return "clickable" in node["flags"] and "role" not in node and (cls in GENERIC_CLASSES or cls.endswith("Layout"))
+    operable = "clickable" in node["flags"] or "checked" in node
+    return operable and "role" not in node and (cls in GENERIC_CLASSES or cls.endswith("Layout"))
 
 
 def has_conflicting_state(node):
@@ -335,7 +337,8 @@ def role_in_descendant(tree, node, speech, roles):
                 return other.get("role") or other.get("class")
     for text in reversed(speech):
         for part in text.split(","):
-            if part.strip().casefold() in roles:
+            # The node's own name trails its utterance too ("Selected, Search in Women"), but it isn't a role.
+            if part.strip().casefold() in roles and part.strip().casefold() != label(node).casefold():
                 return part.strip()
     return None
 
@@ -372,23 +375,33 @@ def dumps(records):
 
 
 def list_problems(tree):
-    """Collections whose items don't match what they declare. Scrolled ones are skipped, by themselves or by
-    a pager inside: a lazy list declares every item but only the visible ones are in the tree."""
+    """Collections whose items don't match what they declare. The count isn't checked on scrolled ones, by
+    themselves or by a pager inside: a lazy list declares every item but only the visible ones are in the tree."""
     for i, node in enumerate(tree):
         m = re.fullmatch(r"(-?\d+)x(-?\d+)", node.get("collection", ""))
-        inside = list(descendants(tree, i))
-        if not m or any("scrollable" in n["flags"] for n in [node] + inside):
+        if not m:
             continue
+        inside = list(descendants(tree, i))
+        scrolled = any("scrollable" in n["flags"] for n in [node] + inside)
         rows, cols = int(m.group(1)), int(m.group(2))
         items = [n for n in inside if "item" in n]
-        loose = [n for n in inside if "clickable" in n["flags"] and "item" not in n]
+        # Clickable elements that aren't items, nor inside one: an item's own buttons belong to it.
+        loose, item_depth = [], None
+        for n in inside:
+            if item_depth is not None and n["depth"] > item_depth:
+                continue
+            item_depth = n["depth"] if "item" in n else None
+            if "clickable" in n["flags"] and "item" not in n:
+                loose.append(n)
         problems = []
-        if rows * cols == 1:
+        if scrolled:
+            pass
+        elif rows * cols == 1:
             problems.append("a list of a single item: TalkBack announces a list with nothing to move through")
         elif min(rows, cols) == 1 and rows * cols != len(items):
             problems.append(f"declares {rows * cols} items, {len(items)} carry item info")
         if loose and items:
-            problems.append(f"{len(loose)} clickable inside without item info: " + ", ".join(repr(label(n) or n.get("id")) for n in loose))
+            problems.append(f"{len(loose)} clickable inside without item info: " + ", ".join(name_or_place(n) for n in loose))
         elif loose:
             problems.append(f"no child carries item info ({len(loose)} clickable inside)")
         if problems:
@@ -765,22 +778,43 @@ def run_keyboard_rules(records, steps_dir):
     ending = keyboard_ending(sequence)
     findings, flagged = [], set()
 
-    previous, hidden = None, []
+    images = {}
+
+    def step(n):
+        if n not in images:
+            images[n] = read_png(steps_dir / f"step-{n:02}.png")[2]
+        return images[n]
+
+    previous, hidden, indicated, stale = None, [], None, set()
     for i, node in enumerate(sequence):
+        # The indicator of the element focus just left should be gone: two elements must not look focused.
+        if indicated and (node is None or element_key(node) != element_key(indicated[0])):
+            left_node, gained = indicated
+            if (steps_dir / f"step-{i:02}.png").exists() and element_key(left_node) not in stale:
+                # The new element's own indicator may touch this one's area: it is left out.
+                arrived = node["bounds"] if node and isinstance(node.get("bounds"), list) else None
+                if not region_changed(step(gained), step(i), left_node["bounds"], arrived):
+                    stale.add(element_key(left_node))
+                    findings.append(finding(
+                        "STALE_FOCUS_INDICATOR", "keyboard", left_node,
+                        f"its focus indicator (step {gained}) is still drawn after focus moved on (step {i})", left_node["t"],
+                    ))
+            indicated = None
         # Focus on something the accessibility tree doesn't expose: only the screen can show where it is.
         boxes = [n["bounds"] for n in all_dumps[i][1] if isinstance(n.get("bounds"), list)]
         if node is None and previous is not None and boxes and (steps_dir / f"step-{i:02}.png").exists():
             screen = [min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes)]
             previous_bounds = previous.get("bounds") if isinstance(previous.get("bounds"), list) else None
-            before, after = read_png(steps_dir / f"step-{i - 1:02}.png")[2], read_png(steps_dir / f"step-{i:02}.png")[2]
-            if not region_changed(before, after, screen, previous_bounds):
+            if not region_changed(step(i - 1), step(i), screen, previous_bounds):
                 hidden.append(i)
         changed = node is not None and (previous is None or element_key(node) != element_key(previous))
         before, after = steps_dir / f"step-{i - 1:02}.png", steps_dir / f"step-{i:02}.png"
         if changed and i > 0 and isinstance(node.get("bounds"), list) and before.exists() and after.exists():
             key = element_key(node)
             previous_bounds = previous.get("bounds") if previous and isinstance(previous.get("bounds"), list) else None
-            if key not in flagged and not region_changed(read_png(before)[2], read_png(after)[2], node["bounds"], previous_bounds):
+            if region_changed(step(i - 1), step(i), node["bounds"], previous_bounds):
+                indicated = (node, i)
+            elif key not in flagged:
                 flagged.add(key)
                 findings.append(finding("FOCUS_NOT_VISIBLE", "keyboard", node, f"nothing changed on screen when it got focus (step {i})", node["t"]))
         previous = node or previous
