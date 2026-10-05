@@ -36,7 +36,7 @@ FOCUS_LOGGER = f"{PACKAGE}/.FocusLoggerService"
 LOG_TAG = "A11ySpeech"
 
 # Focus followed by no speech for this long means TalkBack said nothing for it, not that the
-# user swiped on before it could speak.
+# user swiped on before it could speak: speech starts within 1 s of the focus on real captures.
 SILENT_FOCUS_MS = 1500
 # An upward jump bigger than this between consecutive focuses suggests a reading-order problem.
 ORDER_JUMP_DP = 48
@@ -495,6 +495,7 @@ def run_rules(records, screenshot=None):
     # Other packages' focuses stay in the timeline: they delimit what the app's last focus said.
     timeline = build_timeline(all_focuses, speeches)
     roles = {role.casefold() for s in speeches if (role := trailing_role(s["text"]))}
+    stops_by_element = defaultdict(list)
     for i, entry in enumerate(timeline):
         focus = entry["focus"]
         if focus is not None and focus.get("pkg") != app_pkg:
@@ -510,12 +511,19 @@ def run_rules(records, screenshot=None):
                 findings.append(finding("RAW_TEXT_SPOKEN", "speech", focus, f"{raw!r} in {text[:80]!r}", t))
             if len(text) > LONG_SPEECH_CHARS:
                 findings.append(finding("LONG_SPEECH", "speech", focus, f"{len(text)} chars: {text[:80]}…", t))
-        if focus is None:
+        if focus is not None:
+            next_t = timeline[i + 1]["t"] if i + 1 < len(timeline) else None
+            spoke = any(s.strip() for s in entry["speech"])
+            stops_by_element[element_key(focus)].append((focus, next_t - focus["t"] if next_t else None, spoke))
+    # Silent on every focus, and the user either stayed (a quick swipe on can beat the speech) or came back.
+    for stops in stops_by_element.values():
+        durations = [d for _, d, _ in stops]
+        if any(spoke for _, _, spoke in stops):
             continue
-        next_t = timeline[i + 1]["t"] if i + 1 < len(timeline) else None
-        lingered = next_t is None or next_t - focus["t"] >= SILENT_FOCUS_MS
-        if lingered and not any(s.strip() for s in entry["speech"]):
-            findings.append(finding("SILENT_FOCUS", "speech", focus, "focus with no speech", focus["t"]))
+        if len(stops) > 1 or any(d is None or d >= SILENT_FOCUS_MS for d in durations):
+            longest = "until the end of the walk" if None in durations else f"{max(durations)} ms"
+            detail = f"no speech on any of its {len(stops)} focuses (longest {longest})" if len(stops) > 1 else f"no speech, focused for {longest}"
+            findings.append(finding("SILENT_FOCUS", "speech", stops[0][0], detail, stops[0][0]["t"]))
 
     # A focus owns what TalkBack said for it; a tree node owns the speech of a focus on the same element.
     speech_by_element = defaultdict(list)

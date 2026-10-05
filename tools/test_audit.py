@@ -144,6 +144,35 @@ class NodeRulesTest(unittest.TestCase):
         self.assertEqual(rules(result, "NESTED_ACTIONABLE"), [])
 
 
+class SilentFocusTest(unittest.TestCase):
+
+    HANDLE = f"pkg={PKG} id=- class=View clickable bounds=[0,60][720,146] size=411x48dp"
+    CARD = f"pkg={PKG} id=card class=Button text=\"Top\" clickable bounds=[0,200][360,600] size=205x228dp"
+
+    def test_element_silent_on_two_short_focuses(self):
+        result = run(
+            f"[focus] t=0 {self.HANDLE}",
+            f"[focus] t=400 {self.CARD}", "[speech] t=450 Top, Button",
+            f"[focus] t=5000 {self.HANDLE}",
+            f"[focus] t=6100 {self.CARD}", "[speech] t=6150 Top, Button",
+        )
+        [f] = rules(result, "SILENT_FOCUS")
+        self.assertEqual(f["node"]["bounds"], [0, 60, 720, 146])
+        self.assertIn("2 focuses (longest 1100 ms)", f["detail"])
+
+    def test_single_short_silent_focus_is_a_swipe_past(self):
+        result = run(f"[focus] t=0 {self.HANDLE}", f"[focus] t=42 {self.CARD}", "[speech] t=90 Top, Button")
+        self.assertEqual(rules(result, "SILENT_FOCUS"), [])
+
+    def test_element_spoken_on_another_focus(self):
+        result = run(
+            f"[focus] t=0 {self.CARD}",
+            f"[focus] t=2000 {self.HANDLE}", "[speech] t=2050 Drag handle",
+            f"[focus] t=4000 {self.CARD}", "[speech] t=4050 Top, Button",
+        )
+        self.assertEqual(rules(result, "SILENT_FOCUS"), [])
+
+
 class RawTextTest(unittest.TestCase):
 
     def test_resource_key_spoken(self):
