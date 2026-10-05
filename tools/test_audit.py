@@ -162,6 +162,15 @@ class StructureTest(unittest.TestCase):
         ))
         self.assertEqual(rules(result, "LIST_SEMANTICS"), [])
 
+    def test_list_scrolled_by_a_pager_inside_is_skipped(self):
+        """An image pager in a product card: the card declares 6 images, the pager inside only has the visible one."""
+        result = run(*tree(
+            (1, "id=- class=View collection=1x6 bounds=[0,0][400,300] size=200x150dp"),
+            (2, "id=- class=View collection=1x2147483647 scrollable bounds=[0,0][400,300] size=200x150dp"),
+            (3, "id=image class=View item=0,2 bounds=[0,0][400,300] size=200x150dp"),
+        ))
+        self.assertEqual(rules(result, "LIST_SEMANTICS"), [])
+
     def test_screen_without_any_title(self):
         result = run(*tree((1, "id=a class=TextView text=\"Hi\" heading bounds=[0,0][96,96] size=48x48dp"), window=""))
         self.assertEqual(len(rules(result, "SCREEN_TITLE")), 1)

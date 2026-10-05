@@ -363,14 +363,14 @@ def dumps(records):
 
 
 def list_problems(tree):
-    """Collections whose items don't match what they declare. Scrollable ones are skipped: a lazy list
-    declares every item but only the visible ones are in the tree."""
+    """Collections whose items don't match what they declare. Scrolled ones are skipped, by themselves or by
+    a pager inside: a lazy list declares every item but only the visible ones are in the tree."""
     for i, node in enumerate(tree):
         m = re.fullmatch(r"(-?\d+)x(-?\d+)", node.get("collection", ""))
-        if not m or "scrollable" in node["flags"]:
+        inside = list(descendants(tree, i))
+        if not m or any("scrollable" in n["flags"] for n in [node] + inside):
             continue
         rows, cols = int(m.group(1)), int(m.group(2))
-        inside = list(descendants(tree, i))
         items = [n for n in inside if "item" in n]
         loose = [n for n in inside if "clickable" in n["flags"] and "item" not in n]
         problems = []
