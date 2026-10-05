@@ -308,7 +308,7 @@ class KeyboardTest(unittest.TestCase):
     B = "id=b class=Button text=\"B\" clickable bounds=[20,0][40,10] size=10x5dp"
     C = "id=c class=Button text=\"C\" clickable bounds=[0,10][20,20] size=10x5dp"
 
-    def run_pass(self, focus_per_step, ring_on=("a", "b")):
+    def run_pass(self, focus_per_step, ring_on=("a", "b"), extra=()):
         """One dump and one screenshot per step; the focused button gets a dark ring if listed in ring_on."""
         boxes = {"a": (0, 0, 20, 10), "b": (20, 0, 40, 10), "c": (0, 10, 20, 20)}
         lines = []
@@ -324,7 +324,7 @@ class KeyboardTest(unittest.TestCase):
                     for x in range(left, right):
                         pixels[top][x] = pixels[bottom - 1][x] = (0, 0, 0)
                 write_png(steps / f"step-{i:02}.png", pixels)
-            records = [audit.parse_record(line) for line in lines]
+            records = [audit.parse_record(line) for line in lines + list(extra)]
             return audit.run_keyboard_rules(records, steps)
 
     def test_full_cycle_reaching_everything_with_visible_focus(self):
@@ -336,6 +336,18 @@ class KeyboardTest(unittest.TestCase):
         result = self.run_pass([None, "a", "b", "c", "a"], ring_on=("a", "b"))
         [f] = rules(result, "FOCUS_NOT_VISIBLE")
         self.assertEqual(f["node"]["id"], "c")
+
+    def test_stop_outside_the_accessibility_tree_with_no_visible_change(self):
+        result = self.run_pass([None, "a", None, "b", None, "a"], ring_on=("a", "b"))
+        [f] = rules(result, "FOCUS_NOT_VISIBLE")
+        self.assertIsNone(f["node"])
+        self.assertIn("steps 2, 4", f["detail"])
+
+    def test_element_that_lost_focus_right_away(self):
+        reset = f"[input] t=9 pkg={PKG} " + self.C
+        result = self.run_pass([None, "a", "b", "a"], extra=[reset])
+        [f] = rules(result, "KEYBOARD_UNREACHABLE")
+        self.assertIn("lost it", f["detail"])
 
     def test_element_skipped_in_a_cycle(self):
         result = self.run_pass([None, "a", "b", "a"])

@@ -159,8 +159,8 @@ All of them are evidence to verify, not verdicts. The `a11y-audit` skill confirm
 | `RAW_TEXT_SPOKEN` | `audit.py` | 1.1.1, 4.1.2 | failure | Markup (`<br>`, `&nbsp;`) or a resource key (`screen.title.label`) in the text or the speech |
 | `SCREEN_TITLE` | `audit.py` | 2.4.2 | failure | No window title, pane title or window-change text for the screen |
 | `TEXT_CONTRAST` | `audit.py` | 1.4.3 | failure below 3:1, advisory up to 4.5:1 | Text and background colours measured on `screen-end.png`. Skipped where ATF measured the same element |
-| `FOCUS_NOT_VISIBLE` | `keyboard` | 2.4.7 | failure | Nothing changes on screen around the element that gets keyboard focus |
-| `KEYBOARD_UNREACHABLE` | `keyboard` | 2.1.1 (2.1.2 if stuck) | failure | An actionable element that TAB never reaches |
+| `FOCUS_NOT_VISIBLE` | `keyboard` | 2.4.7 | failure | Nothing changes on screen around the element that gets keyboard focus, or TAB stops on something the accessibility tree doesn't expose and nothing changes at all |
+| `KEYBOARD_UNREACHABLE` | `keyboard` | 2.1.1 (2.1.2 if stuck) | failure | An actionable element that TAB never reaches, or that gets focus and loses it right away (focus reset) |
 | `NESTED_ACTIONABLE` | `audit.py` | 4.1.2, 2.4.3 | advisory | An actionable element inside another one, e.g. a favourite button inside a clickable card |
 | `LIST_SEMANTICS` | `audit.py` | 1.3.1 | advisory | A list whose declared item count doesn't match its items, or clickable children without item info |
 | `FOCUS_MOVED_AFTER_ACTION` | `audit.py` | 2.4.3 | advisory | Within 1 s of an activation, focus jumped to another element; the detail says where |

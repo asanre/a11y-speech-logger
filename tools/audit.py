@@ -765,8 +765,16 @@ def run_keyboard_rules(records, steps_dir):
     ending = keyboard_ending(sequence)
     findings, flagged = [], set()
 
-    previous = None
+    previous, hidden = None, []
     for i, node in enumerate(sequence):
+        # Focus on something the accessibility tree doesn't expose: only the screen can show where it is.
+        boxes = [n["bounds"] for n in all_dumps[i][1] if isinstance(n.get("bounds"), list)]
+        if node is None and previous is not None and boxes and (steps_dir / f"step-{i:02}.png").exists():
+            screen = [min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes)]
+            previous_bounds = previous.get("bounds") if isinstance(previous.get("bounds"), list) else None
+            before, after = read_png(steps_dir / f"step-{i - 1:02}.png")[2], read_png(steps_dir / f"step-{i:02}.png")[2]
+            if not region_changed(before, after, screen, previous_bounds):
+                hidden.append(i)
         changed = node is not None and (previous is None or element_key(node) != element_key(previous))
         before, after = steps_dir / f"step-{i - 1:02}.png", steps_dir / f"step-{i:02}.png"
         if changed and i > 0 and isinstance(node.get("bounds"), list) and before.exists() and after.exists():
@@ -776,6 +784,12 @@ def run_keyboard_rules(records, steps_dir):
                 flagged.add(key)
                 findings.append(finding("FOCUS_NOT_VISIBLE", "keyboard", node, f"nothing changed on screen when it got focus (step {i})", node["t"]))
         previous = node or previous
+    if hidden:
+        findings.append(finding(
+            "FOCUS_NOT_VISIBLE", "keyboard",
+            detail=f"steps {', '.join(map(str, hidden))}: TAB stopped on something the accessibility tree doesn't "
+                   "expose and nothing changed on screen, so neither the user nor a screen reader can tell where focus is",
+        ))
 
     reached = {element_key(n) for n in sequence if n}
     if ending == "stuck":
@@ -784,9 +798,14 @@ def run_keyboard_rules(records, steps_dir):
         why = "never got focus in a full TAB cycle"
     else:
         why = f"not reached in {len(sequence) - 1} TABs"
+    # Input focus that moved on before the step's dump: the element was reached, then focus jumped away.
+    lost = {element_key(r) for r in records if r["kind"] == "input"}
     for node in (all_dumps[0][1] if all_dumps else []):
         if "clickable" in node["flags"] and "disabled" not in node["flags"] and element_key(node) not in reached:
-            findings.append(finding("KEYBOARD_UNREACHABLE", "keyboard", node, why, node["t"]))
+            detail = why
+            if element_key(node) in lost:
+                detail = "got input focus and lost it before the next TAB: check whether focus is reset (2.4.3)"
+            findings.append(finding("KEYBOARD_UNREACHABLE", "keyboard", node, detail, node["t"]))
 
     summary = defaultdict(int)
     for f in findings:
