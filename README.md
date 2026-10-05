@@ -7,6 +7,66 @@ TalkBack's spoken output has no public API, and production builds don't log it. 
 anyway by being the text-to-speech engine TalkBack talks to, so it works with any TalkBack build
 that uses the system's default engine.
 
+## Quick start
+
+You need:
+- an Android device or emulator with TalkBack, Android 8 or later (Android 11 or later for contrast
+  checks), connected with USB debugging on: `adb devices` must list it;
+- JDK 17 or later and the Android SDK, to build the APK. Gradle finds the SDK through `ANDROID_HOME`
+  or `sdk.dir` in `local.properties`, which Android Studio writes when it opens the project;
+- Python 3.9 or later, and `adb` on the `PATH`;
+- an LLM agent that can read files and run commands. The skills are written for
+  [Claude Code](https://claude.com/claude-code); any other agent can follow them by reading their
+  `SKILL.md`.
+
+1. **Set up the device**, once:
+   ```bash
+   ./gradlew :app:installDebug
+   ```
+   Open **A11y Speech Logger** on the device and follow its FAQ:
+   - make it the preferred text-to-speech engine;
+   - enable **A11y Focus Logger**, with its shortcut off;
+   - turn TalkBack off and on again.
+
+   From then on TalkBack is silent: what it says is printed in your terminal. [Setup](#setup) has the
+   details.
+2. **Capture a screen with TalkBack on.**
+   1. In the app you audit, open the screen in the state you want to check: a sheet open, results
+      loaded.
+   2. Run `python3 tools/audit.py capture checkout`. The name only names the folder.
+   3. Swipe right through every element, top to bottom, following along in the terminal. Double-tap
+      what you want to test (a chip, a dropdown), and keep swiping in the state it leads to. Stay on
+      this screen.
+   4. If something didn't work as you expected (you couldn't find an action, the keyboard opened by
+      itself), type it in one line before pressing Enter.
+
+   You get `audits/<date>/checkout/`, with the log, two screenshots and `findings.json`.
+3. **Walk it with a keyboard** (optional, same screen). Turn TalkBack off and leave the screen as it
+   was, then run `python3 tools/audit.py keyboard checkout-keyboard`. You don't need a physical
+   keyboard: TAB is sent over `adb`. It stops on its own.
+4. **Ask for the report**, with the agent started in this repo:
+   - Claude Code:
+     ```
+     /a11y-audit audits/<date>/checkout audits/<date>/checkout-keyboard ~/code/my-app
+     ```
+   - Another agent: *"Read `.claude/skills/a11y-audit/SKILL.md`, and the skills it names in
+     `.claude/skills/`, and follow it on `audits/<date>/checkout` and `audits/<date>/checkout-keyboard`.
+     The app's source is in `~/code/my-app`."*
+
+   The source path is optional: with it, each problem points to a file and line. In Compose, that
+   needs `testTagsAsResourceId` (see [Caveats](#caveats)). The agent writes `report.md` in the
+   capture folder.
+5. **Fix and check.**
+   - `compose-a11y` gives the fix for each component.
+   - `/a11y-retest` checks one issue: paste its text and point it to a new capture, or to the code.
+   - Without a device, `/a11y-audit` reviews a screen from its code:
+     `/a11y-audit "checkout screen" ~/code/my-app`.
+6. **Give the device its voice back** when you're done:
+   ```bash
+   adb shell settings delete secure tts_default_synth
+   ```
+   Then turn off A11y Focus Logger in the accessibility settings.
+
 ## How it works
 
 One APK, two components, both logging to the `A11ySpeech` tag:
@@ -243,11 +303,10 @@ failed, and on older captures.
   are not important for accessibility, just as TalkBack does.
 - **Speech-to-focus matching is approximate.** Each focus owns what is spoken until the next one.
   Swiping very fast can shift utterances between neighbours.
-- **Tested** so far on one device, with a vendor build of TalkBack (13.1). Google's TalkBack relies
-  on the same mechanism, the default TTS engine, but hasn't been tested yet. Reports from other
-  devices are welcome.
-- **Not yet tested on a device**: the ATF results, the keyboard pass and the structure fields (`pane`,
-  `collection`, `item`, `live`, `expanded`, `required`, `window`, `[click]`, `[input]`). Rules over them
+- **Tested** so far on one device, Android 12 with a vendor build of TalkBack (13.1), including the
+  ATF results and the keyboard pass. Google's TalkBack relies on the same mechanism, the default TTS
+  engine, but hasn't been tested yet. Reports from other devices are welcome.
+- **Not yet tested on a device**: `expanded` and `required`, which need Android 16. Rules over them
   are covered by `python3 -m unittest tools/test_audit.py`.
 
 ## License
