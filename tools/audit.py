@@ -91,6 +91,7 @@ RULES = {
     "FOCUS_NOT_VISIBLE": {"severity": "high", "wcag": ["2.4.7"], "conformance": "failure"},
     "KEYBOARD_UNREACHABLE": {"severity": "high", "wcag": ["2.1.1"], "conformance": "failure"},
     "STALE_FOCUS_INDICATOR": {"severity": "medium", "wcag": ["2.4.7"], "conformance": "failure"},
+    "UNREACHABLE_ACTIONS": {"severity": "high", "wcag": ["4.1.2"], "conformance": "failure"},
     # Accessibility Test Framework checks, as `ATF:<check>`. The conformance is that of an ERROR; a WARNING,
     # which ATF gives when it can't be sure (unknown text size, a borderline value), is always advisory.
     "ATF:SpeakableTextPresentCheck": {"severity": "high", "wcag": ["4.1.2", "1.1.1"], "conformance": "failure"},
@@ -335,6 +336,19 @@ def nested_actionables(tree):
                 yield node, inner
 
 
+def unreachable_actions(tree):
+    """Each node with actions that isn't actionable itself, with the nearest clickable node it lies in:
+    TalkBack focuses that one and only offers that one's actions."""
+    holders = {}
+    for i, node in enumerate(tree):
+        if "clickable" in node["flags"]:
+            for other in descendants(tree, i):
+                if other.get("actions") and not actionable(other):
+                    # Inner clickable nodes come later in the dump: the nearest one wins.
+                    holders[id(other)] = (other, node)
+    return list(holders.values())
+
+
 def role_in_descendant(tree, node, speech, roles):
     """Where the role of a clickable node without one lives, or None if nowhere.
 
@@ -491,6 +505,10 @@ def run_rules(records, screenshot=None):
     for node, inner in nested_actionables(tree):
         names = ", ".join(repr(label(n) or n.get("id")) for n in inner)
         findings.append(finding("NESTED_ACTIONABLE", "tree", node, f"{len(inner)} clickable inside: {names}", node["t"]))
+    for node, holder in unreachable_actions(tree):
+        actions = ", ".join(repr(a) for a in node["actions"].split("|"))
+        detail = f"actions {actions} sit inside {name_or_place(holder)}, which is what TalkBack focuses: they are not offered"
+        findings.append(finding("UNREACHABLE_ACTIONS", "tree", node, detail, node["t"]))
 
     # Other packages' focuses stay in the timeline: they delimit what the app's last focus said.
     timeline = build_timeline(all_focuses, speeches)

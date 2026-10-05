@@ -173,6 +173,31 @@ class SilentFocusTest(unittest.TestCase):
         self.assertEqual(rules(result, "SILENT_FOCUS"), [])
 
 
+class UnreachableActionsTest(unittest.TestCase):
+
+    def test_actions_inside_the_focused_card_are_not_offered(self):
+        result = run(*tree(
+            (1, "id=- class=View clickable bounds=[0,0][400,600] size=200x300dp"),
+            (2, "id=ProductCard class=View actions=\"Add to bag|+1 colour\" bounds=[0,0][400,600] size=200x300dp"),
+            (3, "id=- class=TextView text=\"Top\" bounds=[0,500][400,560] size=200x30dp"),
+        ))
+        [f] = rules(result, "UNREACHABLE_ACTIONS")
+        self.assertEqual(f["node"]["id"], "ProductCard")
+        self.assertIn("'Add to bag', '+1 colour'", f["detail"])
+        self.assertEqual(f["conformance"], "failure")
+
+    def test_actions_on_the_clickable_node_are_offered(self):
+        result = run(*tree(
+            (1, "id=handle class=View actions=\"Close sheet\" clickable bounds=[0,0][720,84] size=411x48dp"),
+            (2, "id=tooltip class=View actions=\"Show tooltip\" longclickable bounds=[0,6][720,78] size=411x41dp"),
+        ))
+        self.assertEqual(rules(result, "UNREACHABLE_ACTIONS"), [])
+
+    def test_actions_outside_any_clickable_node(self):
+        result = run(*tree((1, "id=row class=View text=\"Top\" actions=\"Delete\" bounds=[0,0][400,100] size=200x50dp")))
+        self.assertEqual(rules(result, "UNREACHABLE_ACTIONS"), [])
+
+
 class RawTextTest(unittest.TestCase):
 
     def test_resource_key_spoken(self):
