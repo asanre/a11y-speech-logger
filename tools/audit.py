@@ -308,12 +308,22 @@ def was_spoken(text, spoken):
     return any(f[:40] in spoken for f in long_ones) if long_ones else normalized(text) in spoken
 
 
+def within(inner, outer):
+    """Whether inner's bounds lie within outer's; true when either has none."""
+    a, b = inner.get("bounds"), outer.get("bounds")
+    if not (isinstance(a, list) and isinstance(b, list)):
+        return True
+    return b[0] <= a[0] and b[1] <= a[1] and a[2] <= b[2] and a[3] <= b[3]
+
+
 def descendants(tree, i):
-    """The nodes dumped inside tree[i], in tree order."""
+    """The nodes dumped inside tree[i], in tree order. Only nodes worth logging are dumped, so a deeper node
+    may be the child of an undumped sibling: it must also lie within tree[i]'s bounds."""
     for other in tree[i + 1:]:
         if other["depth"] <= tree[i]["depth"]:
             break
-        yield other
+        if within(other, tree[i]):
+            yield other
 
 
 def nested_actionables(tree):

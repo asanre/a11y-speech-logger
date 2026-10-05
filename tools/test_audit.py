@@ -134,6 +134,15 @@ class NodeRulesTest(unittest.TestCase):
         self.assertEqual(f["node"]["id"], "card")
         self.assertIn("'Add'", f["detail"])
 
+    def test_children_of_an_undumped_sibling_are_not_nested(self):
+        """The input row's container isn't dumped: its children follow the last card, deeper, but outside it."""
+        result = run(*tree(
+            (1, "id=card class=Button clickable bounds=[0,0][400,400] size=200x200dp"),
+            (2, "id=field class=EditText clickable bounds=[0,500][300,596] size=150x48dp"),
+            (2, "id=mic class=Button desc=\"Mic\" clickable bounds=[300,500][396,596] size=48x48dp"),
+        ))
+        self.assertEqual(rules(result, "NESTED_ACTIONABLE"), [])
+
 
 class RawTextTest(unittest.TestCase):
 
