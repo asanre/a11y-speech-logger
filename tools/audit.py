@@ -541,7 +541,10 @@ def run_rules(records, screenshot=None):
             continue
         if len(stops) > 1 or any(d is None or d >= SILENT_FOCUS_MS for d in durations):
             longest = "until the end of the walk" if None in durations else f"{max(durations)} ms"
-            detail = f"no speech on any of its {len(stops)} focuses (longest {longest})" if len(stops) > 1 else f"no speech, focused for {longest}"
+            if len(stops) > 1:
+                detail = f"no speech on any of its {len(stops)} focuses (longest {longest})"
+            else:
+                detail = "no speech, focused until the end of the walk" if None in durations else f"no speech, focused for {longest}"
             findings.append(finding("SILENT_FOCUS", "speech", stops[0][0], detail, stops[0][0]["t"]))
 
     # A focus owns what TalkBack said for it; a tree node owns the speech of a focus on the same element.

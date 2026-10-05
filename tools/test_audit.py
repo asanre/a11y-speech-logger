@@ -160,6 +160,11 @@ class SilentFocusTest(unittest.TestCase):
         self.assertEqual(f["node"]["bounds"], [0, 60, 720, 146])
         self.assertIn("2 focuses (longest 1100 ms)", f["detail"])
 
+    def test_last_focus_of_the_walk_silent(self):
+        result = run(f"[focus] t=0 {self.CARD}", "[speech] t=50 Top, Button", f"[focus] t=3000 {self.HANDLE}")
+        [f] = rules(result, "SILENT_FOCUS")
+        self.assertEqual(f["detail"], "no speech, focused until the end of the walk")
+
     def test_single_short_silent_focus_is_a_swipe_past(self):
         result = run(f"[focus] t=0 {self.HANDLE}", f"[focus] t=42 {self.CARD}", "[speech] t=90 Top, Button")
         self.assertEqual(rules(result, "SILENT_FOCUS"), [])

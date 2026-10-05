@@ -66,7 +66,7 @@ screens of one app. 4.1.1 Parsing is obsolete in 2.2 and left out.
 | 3.3.4 Error Prevention | AA | Legal, financial and data submissions can be reviewed, corrected or undone | Flow, not a screen | No |
 | 3.3.7 Redundant Entry | A | Information already entered isn't asked for again in the same flow | Flow, not a screen | No |
 | 3.3.8 Accessible Authentication (Minimum) | AA | Login doesn't require a cognitive test; paste and password managers work | Code and flow | No |
-| 4.1.2 Name, Role, Value | A | Every control exposes its name, its role and its state | `NO_LABEL`, `SILENT_FOCUS`, `NO_ROLE`, `CONFLICTING_STATE`, `NESTED_ACTIONABLE`, `ATF:SpeakableTextPresentCheck`, `ATF:ClassNameCheck`; the spoken state against the screenshot | Yes |
+| 4.1.2 Name, Role, Value | A | Every control exposes its name, its role and its state | `NO_LABEL`, `SILENT_FOCUS`, `NO_ROLE`, `CONFLICTING_STATE`, `NESTED_ACTIONABLE`, `UNREACHABLE_ACTIONS`, `ATF:SpeakableTextPresentCheck`, `ATF:ClassNameCheck`; the spoken state against the screenshot | Yes |
 | 4.1.3 Status Messages | AA | Status changes (results count, errors, "added to cart", loading) are announced without moving focus | `appeared` (text that showed up and was never spoken), `[announce]`, `live` | Partly |
 
 ## Advisory, not failure
