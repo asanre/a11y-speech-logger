@@ -1015,7 +1015,8 @@ def live_line(record):
         issues = f" [{','.join(record['issues'])}]" if record["issues"] else ""
         bounds = record.get("bounds")
         where = f" [{bounds[0]},{bounds[1]}][{bounds[2]},{bounds[3]}]" if isinstance(bounds, list) else ""
-        return f"→ {record.get('class')} {name}{where}{issues}"
+        actions = f" actions={quoted(record['actions'])}" if record.get("actions") else ""
+        return f"→ {record.get('class')} {name}{where}{actions}{issues}"
     if kind == "tree":
         marker = record.get("marker", "")
         return f"[tree] {marker.removeprefix('end ')}" if marker.startswith(("end", "no active")) else None
@@ -1143,6 +1144,8 @@ def press_keys(folder, meta, action, times):
         moved = any(r["kind"] == "focus" for r in new)
         if not moved:
             print("    (focus didn't move)", flush=True)
+        elif not any(r["kind"] == "speech" and r["text"] for r in new):
+            print("    (nothing spoken)", flush=True)
         idle = 0 if moved else idle + 1
         focuses = [r for r in records if r["kind"] == "focus" and r["t"] > meta["walk_from"]]
         if action == "next" and (ending := talkback_walk_ending(focuses, meta["pkg"], idle)):
