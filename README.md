@@ -11,7 +11,9 @@ that uses the system's default engine.
 
 You need:
 - an Android device or emulator with TalkBack, Android 8 or later (Android 11 or later for contrast
-  checks), connected with USB debugging on: `adb devices` must list it;
+  checks), connected with USB debugging on: `adb devices` must list it. For the walks driven from
+  `adb` (by the agent or `--auto`), its shell also needs the `hid` tool; `start` checks it. Tested on
+  Android 12 so far;
 - JDK 17 or later and the Android SDK, to build the APK. Gradle finds the SDK through `ANDROID_HOME`
   or `sdk.dir` in `local.properties`, which Android Studio writes when it opens the project;
 - Python 3.9 or later, and `adb` on the `PATH`;
@@ -29,13 +31,20 @@ You need:
    - turn TalkBack off and on again.
 
    From then on TalkBack is silent: what it says is printed in your terminal. [Setup](#setup) has the
-   details.
+   details. If you installed the APK before the walks driven from `adb` existed, install it again.
 
    **Or let the agent do steps 2 to 4.** Open the screen on the device and ask, with the agent started
-   in this repo: *"audit the screen open on my device"* (in Claude Code, `/a11y-audit` followed by that
-   sentence; add the app's source path to locate each problem). It walks the screen with TalkBack,
-   activates what changes the screen's state, and writes the report. It asks before activating
-   anything that buys, sends, deletes or changes the account. See
+   in this repo:
+   - Claude Code: `/a11y-audit audit the screen open on my device ~/code/my-app`;
+   - another agent: *"Read `.claude/skills/a11y-audit/SKILL.md`, and the files and skills it names,
+     and follow its Device mode on the screen open on my device. The app's source is in
+     `~/code/my-app`."*
+
+   The source path is optional. The agent walks the screen with TalkBack, activates what changes the
+   screen's state, and writes `audits/<date>/<screen>/report.md` next to the capture. It asks before
+   activating anything that buys, sends, deletes or changes the account. It runs many `adb` and
+   `python3 tools/audit.py` commands: allow them, or be ready to approve each one, or it stops at the
+   first it can't run (then what it couldn't activate is listed as not tested). See
    [Driving TalkBack](#driving-talkback).
 2. **Capture a screen with TalkBack on.**
    1. In the app you audit, open the screen in the state you want to check: a sheet open, results
@@ -101,8 +110,8 @@ On top of the APK:
 - **`tools/audit.py`**: captures a session per screen (walked by you, on its own, or by an agent step
   by step), walks it with a keyboard, and runs rules tagged with their WCAG 2.2 criteria.
 - [Claude Code](https://claude.com/claude-code) skills in `.claude/skills/`:
-  - **`a11y-audit`**: turns a capture, or the screen's code when there is no device, into a report by
-    WCAG criterion;
+  - **`a11y-audit`**: walks a screen on the device with TalkBack itself, or takes a capture you made,
+    or the screen's code when there is no device, and turns it into a report by WCAG criterion;
   - **`a11y-retest`**: checks whether a reported issue is fixed;
   - **`compose-a11y`**: accessible Compose patterns, with the expected speech and a test for each.
 
@@ -345,6 +354,9 @@ failed, and on older captures.
 - Media, timing, motion and gestures (1.2.x, 2.2.x, 2.5.1, 2.5.4).
 - Flows across screens (3.3.4, 3.3.7, 3.3.8), except by comparing captures.
 - iOS. For a WebView, the tool sees only the node tree that WebView exposes.
+- In the walks driven from `adb`: links inside a text (`activate` clicks the whole text), TalkBack's
+  menus (actions, links), and long-press. Long lists that scroll as TalkBack moves, and Google's
+  TalkBack, haven't been tested yet.
 
 ## Caveats
 
