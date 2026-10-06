@@ -460,6 +460,41 @@ class KeyboardTest(unittest.TestCase):
         self.assertIn("2.1.2", f["detail"])
 
 
+class TalkBackWalkTest(unittest.TestCase):
+
+    @staticmethod
+    def focuses(*ids, pkg=PKG):
+        return [audit.parse_record(f"[focus] t={i} pkg={pkg} id={i_d} class=Button bounds=[0,0][10,10]")
+                for i, i_d in enumerate(ids)]
+
+    def test_back_on_the_first_element_ends_the_walk(self):
+        self.assertEqual(audit.talkback_walk_ending(self.focuses("a", "b", "c", "a"), PKG), "cycle")
+
+    def test_focus_in_the_system_bars_ends_the_walk(self):
+        bars = self.focuses("a", "b") + self.focuses("home", pkg="com.android.systemui")
+        self.assertEqual(audit.talkback_walk_ending(bars, PKG), "left app")
+
+    def test_presses_that_move_nothing_end_the_walk(self):
+        self.assertEqual(audit.talkback_walk_ending(self.focuses("a", "b"), PKG, idle_steps=3), "stopped")
+
+    def test_walk_halfway_goes_on(self):
+        self.assertIsNone(audit.talkback_walk_ending(self.focuses("a", "b"), PKG, idle_steps=1))
+
+
+class WithServiceTest(unittest.TestCase):
+    TALKBACK = "com.example.talkback/com.example.talkback.TalkBackService"
+    LOGGER = "io.github.asanre.a11ylogger/io.github.asanre.a11ylogger.FocusLoggerService"
+
+    def test_turning_on_keeps_the_other_services(self):
+        self.assertEqual(audit.with_service(self.LOGGER + "\n", self.TALKBACK, True), f"{self.LOGGER}:{self.TALKBACK}")
+
+    def test_turning_off_keeps_the_other_services(self):
+        self.assertEqual(audit.with_service(f"{self.TALKBACK}:{self.LOGGER}", self.TALKBACK, False), self.LOGGER)
+
+    def test_no_services_set_yet(self):
+        self.assertEqual(audit.with_service("null", self.TALKBACK, True), self.TALKBACK)
+
+
 class AtfTest(unittest.TestCase):
     SALE = "id=a class=TextView text=\"Sale\" bounds=[0,0][40,20] size=20x10dp"
 

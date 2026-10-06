@@ -29,18 +29,28 @@ import kotlin.math.roundToInt
  * - `[window]` window and pane changes, `[announce]` announcements,
  * - `[tree]` the active window's node tree, on `adb shell am broadcast -a <ACTION_DUMP>`,
  * - `[atf]` the Accessibility Test Framework results on that window, when the broadcast adds `--ez atf true`.
+ *
+ * On `adb shell am broadcast -a <ACTION_FOCUS_WINDOW>` it moves accessibility focus into the active window: see
+ * [focusActiveWindow]. On `<ACTION_ACTIVATE>` it clicks the node TalkBack has focus on, as a double tap does.
  */
 class FocusLoggerService : AccessibilityService() {
 
     private val dumpReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
+            when (intent.action) {
+                ACTION_FOCUS_WINDOW -> return focusActiveWindow()
+                ACTION_ACTIVATE -> return activateFocused()
+            }
             dumpTree()
             if (intent.getBooleanExtra(EXTRA_ATF, false)) checkWithAtf()
         }
     }
 
     override fun onServiceConnected() {
-        val filter = IntentFilter(ACTION_DUMP)
+        val filter = IntentFilter(ACTION_DUMP).apply {
+            addAction(ACTION_FOCUS_WINDOW)
+            addAction(ACTION_ACTIVATE)
+        }
         if (Build.VERSION.SDK_INT >= 33) {
             registerReceiver(dumpReceiver, filter, RECEIVER_EXPORTED)
         } else {
@@ -91,6 +101,31 @@ class FocusLoggerService : AccessibilityService() {
         }
         visit(root, 0)
         logA11y("tree", "end nodes=$count")
+    }
+
+    /**
+     * Moves accessibility focus to the last node of the active window. TalkBack's "first item" shortcut works
+     * within the window that has focus, which can be the navigation bar; from here it reaches the app's first
+     * item, and always as a move, so the walk's first element gets a `[focus]` of its own.
+     */
+    private fun focusActiveWindow() {
+        val root = rootInActiveWindow ?: return
+        var last: AccessibilityNodeInfo? = null
+        fun visit(node: AccessibilityNodeInfo) {
+            if (!node.isVisibleToUser) return
+            if (node.isWorthLogging()) last = node
+            for (i in 0 until node.childCount) node.getChild(i)?.let(::visit)
+        }
+        visit(root)
+        last?.performAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS)
+    }
+
+    /**
+     * A double tap makes TalkBack click the node it has focus on. Its keyboard shortcut for that needs a keyboard
+     * with letters, which recreates the activity on screen when it is connected, so the click is done here.
+     */
+    private fun activateFocused() {
+        findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
     }
 
     /**
@@ -236,6 +271,8 @@ class FocusLoggerService : AccessibilityService() {
 
     companion object {
         const val ACTION_DUMP = "io.github.asanre.a11ylogger.DUMP"
+        const val ACTION_FOCUS_WINDOW = "io.github.asanre.a11ylogger.FOCUS_WINDOW"
+        const val ACTION_ACTIVATE = "io.github.asanre.a11ylogger.ACTIVATE"
         private const val EXTRA_ATF = "atf"
         private val REPORTED_ATF_TYPES = setOf(AccessibilityCheckResultType.ERROR, AccessibilityCheckResultType.WARNING)
         private const val EXTRA_ROLE_DESCRIPTION = "AccessibilityNodeInfo.roleDescription"

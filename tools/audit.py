@@ -13,6 +13,23 @@
       screenshot (keyboard/step-NN.png) after each key, stops when focus cycles or stops moving,
       then saves session.txt and runs `rules`.
 
+  audit.py capture <screen> --auto [--steps 60] [--out audits] [--serial SERIAL]
+      Walks the screen with TalkBack on its own, from its first element until focus comes back to it,
+      without activating anything. Same output as `capture`, without notes.md.
+
+  audit.py start <screen> [--out audits] [--serial SERIAL]
+  audit.py press next|prev|first|activate [--times N] [--dir DIR]
+  audit.py look [--dir DIR]
+  audit.py stop [--dir DIR]
+      The same capture, one step per call, for an agent that drives TalkBack itself. `start` connects
+      a virtual keyboard (the system's `hid` tool) whose keys TalkBack takes as its shortcuts and dumps
+      the tree; `press` sends a shortcut and prints what it produced; `look` saves a screenshot;
+      `stop` dumps again, disconnects the keyboard, saves session.txt and runs `rules`. Without
+      --dir they act on the session `start` opened.
+
+  audit.py talkback on|off [--serial SERIAL]
+      Turns TalkBack on or off, keeping the other accessibility services.
+
   audit.py rules <dir>
       Parses <dir>/session.txt and writes <dir>/findings.json.
 
@@ -22,7 +39,10 @@ Only needs Python 3 and adb. The log format is described in the README.
 import argparse
 import datetime
 import json
+import os
 import re
+import shlex
+import signal
 import subprocess
 import sys
 import threading
@@ -34,7 +54,10 @@ from pathlib import Path
 PACKAGE = "io.github.asanre.a11ylogger"
 DUMP_ACTION = f"{PACKAGE}.DUMP"
 FOCUS_LOGGER = f"{PACKAGE}/.FocusLoggerService"
+FOCUS_WINDOW_ACTION = f"{PACKAGE}.FOCUS_WINDOW"
+ACTIVATE_ACTION = f"{PACKAGE}.ACTIVATE"
 LOG_TAG = "A11ySpeech"
+ACTIVE_SESSION = Path.home() / ".cache" / "a11y-speech-logger" / "active"
 
 # Focus followed by no speech for this long means TalkBack said nothing for it, not that the
 # user swiped on before it could speak: speech starts within 1 s of the focus on real captures.
@@ -138,6 +161,29 @@ UNIFORM_BACKGROUND = 0.4
 KEYBOARD_STUCK_STEPS = 3
 # Focus indicators are often drawn just outside the element: pixels this far out are compared too.
 FOCUS_RING_PX = 6
+
+# A USB keyboard with modifiers, Enter, Tab and arrows (usages 0x28-0x52) but no letters: Android
+# then doesn't count it as a keyboard in the configuration, so connecting it doesn't recreate the
+# activity on screen. Report: modifier bits, a reserved byte, six key usages.
+HID_DESCRIPTOR = [
+    0x05, 0x01, 0x09, 0x06, 0xA1, 0x01,
+    0x05, 0x07, 0x19, 0xE0, 0x29, 0xE7, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x08, 0x81, 0x02,
+    0x95, 0x01, 0x75, 0x08, 0x81, 0x01,
+    0x95, 0x06, 0x75, 0x08, 0x15, 0x28, 0x25, 0x52, 0x05, 0x07, 0x19, 0x28, 0x29, 0x52, 0x81, 0x00,
+    0xC0,
+]
+LEFT_CTRL, LEFT_ALT = 0x01, 0x04
+# TalkBack's keyboard shortcuts, as (modifiers, key usage). Its shortcut to activate needs a keyboard
+# with letters, so `activate` asks the focus logger to click instead.
+TALKBACK_KEYS = {
+    "next": (LEFT_ALT, 0x4F),              # Alt+Right
+    "prev": (LEFT_ALT, 0x50),              # Alt+Left
+    "first": (LEFT_ALT | LEFT_CTRL, 0x50),  # Alt+Ctrl+Left, within the window that has focus
+}
+# Long enough for TalkBack to speak, and for a stop with no speech to count as SILENT_FOCUS.
+TALKBACK_STEP_S = 1.5
+# Time for Android to add the virtual keyboard before the first key.
+KEYBOARD_SETTLE_S = 2
 
 # WCAG 2.5.8 asks for 24x24 CSS px; Android's guideline is 48dp. One dp is one CSS px.
 WCAG_TARGET_DP = 24
@@ -789,6 +835,25 @@ def keyboard_ending(sequence):
     return None
 
 
+def talkback_walk_ending(focuses, app_pkg, idle_steps=0):
+    """Why a forward TalkBack walk is over: "left app" when focus went to another package (the system
+    bars), "cycle" when it came back to the first element, "stopped" after presses that moved nothing:
+    usually the end of the window, a trap if elements are left below."""
+    if focuses and focuses[-1].get("pkg") != app_pkg:
+        return "left app"
+    if keyboard_ending(focuses) == "cycle":
+        return "cycle"
+    if idle_steps >= KEYBOARD_STUCK_STEPS:
+        return "stopped"
+    return None
+
+
+def with_service(services, component, enabled):
+    """The `enabled_accessibility_services` value with `component` added or removed, others kept."""
+    kept = [s for s in services.strip().split(":") if s not in ("", "null", component)]
+    return ":".join(kept + [component] if enabled else kept)
+
+
 def expanded(bounds, height, width):
     left, top, right, bottom = bounds
     return (max(left - FOCUS_RING_PX, 0), max(top - FOCUS_RING_PX, 0),
@@ -907,6 +972,11 @@ def adb(serial, *args, binary=False):
     return result.stdout if binary else result.stdout.decode("utf-8", "replace")
 
 
+def records_of(serial):
+    log = adb(serial, "logcat", "-d", "-s", f"{LOG_TAG}:I", "-v", "raw")
+    return [r for r in map(parse_record, log.splitlines()) if r]
+
+
 def warn_if_not_ready(serial):
     engine = adb(serial, "shell", "settings", "get", "secure", "tts_default_synth").strip()
     services = adb(serial, "shell", "settings", "get", "secure", "enabled_accessibility_services")
@@ -943,7 +1013,9 @@ def live_line(record):
     if kind == "focus":
         name = quoted(label(record)) if label(record) else "(no label)"
         issues = f" [{','.join(record['issues'])}]" if record["issues"] else ""
-        return f"→ {record.get('class')} {name}{issues}"
+        bounds = record.get("bounds")
+        where = f" [{bounds[0]},{bounds[1]}][{bounds[2]},{bounds[3]}]" if isinstance(bounds, list) else ""
+        return f"→ {record.get('class')} {name}{where}{issues}"
     if kind == "tree":
         marker = record.get("marker", "")
         return f"[tree] {marker.removeprefix('end ')}" if marker.startswith(("end", "no active")) else None
@@ -975,7 +1047,157 @@ def read_session(serial, dumps, atf=False):
     return session
 
 
+def talkback_component(serial):
+    found = re.search(r"[\w.]+/[\w.]*TalkBackService", adb(serial, "shell", "dumpsys", "accessibility"))
+    if not found:
+        sys.exit("error: TalkBack is not installed")
+    return found.group()
+
+
+def talkback(args):
+    services = adb(args.serial, "shell", "settings", "get", "secure", "enabled_accessibility_services")
+    value = with_service(services, talkback_component(args.serial), args.state == "on")
+    if value:
+        adb(args.serial, "shell", "settings", "put", "secure", "enabled_accessibility_services", value)
+        adb(args.serial, "shell", "settings", "put", "secure", "accessibility_enabled", "1")
+    else:
+        adb(args.serial, "shell", "settings", "delete", "secure", "enabled_accessibility_services")
+    time.sleep(2)  # TalkBack takes a moment to start or stop
+    print(f"TalkBack {args.state}: {value or '(no services)'}")
+
+
+def start_session(serial, out, screen):
+    """Connects the virtual keyboard through a background relay that outlives this process, puts
+    accessibility focus in the app's window, clears the log and dumps the tree."""
+    if ACTIVE_SESSION.exists():
+        sys.exit(f"error: a session is open in {ACTIVE_SESSION.read_text().strip()}; run `stop` first")
+    warn_if_not_ready(serial)
+    services = adb(serial, "shell", "settings", "get", "secure", "enabled_accessibility_services")
+    if "talkback" not in services.casefold():
+        sys.exit("error: TalkBack is off; turn it on with `audit.py talkback on`")
+    if not adb(serial, "shell", "command -v hid || true").strip():
+        sys.exit("error: this device has no `hid` tool, so TalkBack can't be driven; walk it by hand with `capture`")
+    folder = output_dir(out, screen).resolve()
+    keys = folder / ".keys"
+    register = {"id": 1, "command": "register", "name": "A11y Audit Keyboard", "vid": 0x18D1, "pid": 0x0001,
+                "bus": "usb", "descriptor": HID_DESCRIPTOR}
+    keys.write_text(json.dumps(register) + "\n")
+    relay = subprocess.Popen(["sh", "-c", f"tail -n +1 -f {shlex.quote(str(keys))} | "
+                              f"{shlex.join(adb_cmd(serial, 'shell', 'hid', '-'))}"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    meta = {"serial": serial, "relay": relay.pid, "walk_from": -1, "pkg": None}
+    # Written now, so `stop` can disconnect the keyboard if anything below fails.
+    (folder / ".session.json").write_text(json.dumps(meta))
+    ACTIVE_SESSION.parent.mkdir(parents=True, exist_ok=True)
+    ACTIVE_SESSION.write_text(str(folder))
+    time.sleep(KEYBOARD_SETTLE_S)
+    # Done before the log is cleared, so this focus, which TalkBack didn't choose, stays out of the session.
+    adb(serial, "shell", "am", "broadcast", "-a", FOCUS_WINDOW_ACTION)
+    time.sleep(1)
+    adb(serial, "logcat", "-c")
+    snapshot(serial, folder / "screen-start.png")
+    first_dump = dumps([r for r in map(parse_record, read_session(serial, dumps=1).splitlines()) if r])
+    meta["pkg"] = first_dump[0][0].get("pkg") if first_dump else None
+    (folder / ".session.json").write_text(json.dumps(meta))
+    return folder, meta
+
+
+def open_session(directory):
+    if directory:
+        folder = Path(directory)
+    else:
+        folder = Path(ACTIVE_SESSION.read_text().strip()) if ACTIVE_SESSION.exists() else None
+    if not folder or not (folder / ".session.json").exists():
+        sys.exit("error: no open session; run `start` first")
+    return folder, json.loads((folder / ".session.json").read_text())
+
+
+def new_walk(folder, meta, since):
+    meta["walk_from"] = since
+    (folder / ".session.json").write_text(json.dumps(meta))
+
+
+def press_keys(folder, meta, action, times):
+    """Presses a TalkBack shortcut (or activates) up to `times` times and prints what each press
+    produced. Going forward, it stops when the walk is over and returns why. The end is only looked
+    for in the focuses since the walk began: after `first`, `activate` or the end of the last walk."""
+    idle = 0
+    for _ in range(times):
+        before = records_of(meta["serial"])
+        last_t = before[-1]["t"] if before else -1
+        if action == "activate":
+            adb(meta["serial"], "shell", "am", "broadcast", "-a", ACTIVATE_ACTION)
+        else:
+            modifiers, key = TALKBACK_KEYS[action]
+            with (folder / ".keys").open("a") as keys:
+                for report in ([modifiers, 0, 0], [modifiers, 0, key], [0, 0, 0]):
+                    keys.write(json.dumps({"id": 1, "command": "report", "report": report + [0] * 5}) + "\n")
+        if action in ("first", "activate"):
+            new_walk(folder, meta, last_t)
+        time.sleep(TALKBACK_STEP_S)
+        records = records_of(meta["serial"])
+        new = [r for r in records if r["t"] > last_t]
+        for record in new:
+            if (record["kind"] != "speech" or record["text"]) and (shown := live_line(record)):
+                print(shown, flush=True)
+        moved = any(r["kind"] == "focus" for r in new)
+        if not moved:
+            print("    (focus didn't move)", flush=True)
+        idle = 0 if moved else idle + 1
+        focuses = [r for r in records if r["kind"] == "focus" and r["t"] > meta["walk_from"]]
+        if action == "next" and (ending := talkback_walk_ending(focuses, meta["pkg"], idle)):
+            print(f"walk ended: {ending}", flush=True)
+            new_walk(folder, meta, records[-1]["t"])
+            return ending
+    return None
+
+
+def stop_session(folder, meta):
+    try:
+        snapshot(meta["serial"], folder / "screen-end.png", atf=True)
+        session = read_session(meta["serial"], dumps=2, atf=True)
+        (folder / "session.txt").write_text(session, encoding="utf-8")
+    finally:
+        try:
+            os.killpg(meta["relay"], signal.SIGTERM)  # closing the relay disconnects the keyboard
+        except ProcessLookupError:
+            pass
+        for leftover in (folder / ".keys", folder / ".session.json", ACTIVE_SESSION):
+            leftover.unlink(missing_ok=True)
+    print(f"saved {folder}")
+    rules(argparse.Namespace(dir=folder))
+
+
+def start(args):
+    folder, _ = start_session(args.serial, args.out, args.screen)
+    print(folder)
+
+
+def press(args):
+    folder, meta = open_session(args.dir)
+    press_keys(folder, meta, args.action, args.times)
+
+
+def look(args):
+    folder, meta = open_session(args.dir)
+    path = folder / f"look-{len(list(folder.glob('look-*.png'))) + 1:02}.png"
+    path.write_bytes(adb(meta["serial"], "exec-out", "screencap", "-p", binary=True))
+    print(path)
+
+
+def stop(args):
+    stop_session(*open_session(args.dir))
+
+
 def capture(args):
+    if args.auto:
+        folder, meta = start_session(args.serial, args.out, args.screen)
+        try:
+            press_keys(folder, meta, "first", 1)
+            press_keys(folder, meta, "next", args.steps)
+        finally:
+            stop_session(folder, meta)
+        return
     warn_if_not_ready(args.serial)
     folder = output_dir(args.out, args.screen)
     adb(args.serial, "logcat", "-c")
@@ -1047,7 +1269,29 @@ def main():
     cap.add_argument("screen", help="name for the screen, used as folder name")
     cap.add_argument("--out", default="audits", help="base folder (default: audits)")
     cap.add_argument("--serial", help="adb device serial, when more than one is connected")
+    cap.add_argument("--auto", action="store_true", help="walk the screen with TalkBack on its own")
+    cap.add_argument("--steps", type=int, default=60, help="with --auto, maximum number of moves (default: 60)")
     cap.set_defaults(func=capture)
+    sta = sub.add_parser("start", help="open a capture driven step by step (for an agent)")
+    sta.add_argument("screen", help="name for the screen, used as folder name")
+    sta.add_argument("--out", default="audits", help="base folder (default: audits)")
+    sta.add_argument("--serial", help="adb device serial, when more than one is connected")
+    sta.set_defaults(func=start)
+    pre = sub.add_parser("press", help="send a TalkBack shortcut and print what it produced")
+    pre.add_argument("action", choices=[*TALKBACK_KEYS, "activate"])
+    pre.add_argument("--times", type=int, default=1, help="presses; going next, stops when the walk ends")
+    pre.add_argument("--dir", help="session folder (default: the open one)")
+    pre.set_defaults(func=press)
+    loo = sub.add_parser("look", help="save a screenshot in the session folder and print its path")
+    loo.add_argument("--dir", help="session folder (default: the open one)")
+    loo.set_defaults(func=look)
+    sto = sub.add_parser("stop", help="dump again, disconnect the keyboard, save and run the rules")
+    sto.add_argument("--dir", help="session folder (default: the open one)")
+    sto.set_defaults(func=stop)
+    tal = sub.add_parser("talkback", help="turn TalkBack on or off, keeping the other services")
+    tal.add_argument("state", choices=["on", "off"])
+    tal.add_argument("--serial", help="adb device serial, when more than one is connected")
+    tal.set_defaults(func=talkback)
     key = sub.add_parser("keyboard", help="walk a screen with TAB and check keyboard access")
     key.add_argument("screen", help="name for the screen, used as folder name")
     key.add_argument("--steps", type=int, default=60, help="maximum number of TABs (default: 60)")
