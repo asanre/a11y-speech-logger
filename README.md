@@ -30,6 +30,13 @@ You need:
 
    From then on TalkBack is silent: what it says is printed in your terminal. [Setup](#setup) has the
    details.
+
+   **Or let the agent do steps 2 to 4.** Open the screen on the device and ask, with the agent started
+   in this repo: *"audit the screen open on my device"* (in Claude Code, `/a11y-audit` followed by that
+   sentence; add the app's source path to locate each problem). It walks the screen with TalkBack,
+   activates what changes the screen's state, and writes the report. It asks before activating
+   anything that buys, sends, deletes or changes the account. See
+   [Driving TalkBack](#driving-talkback).
 2. **Capture a screen with TalkBack on.**
    1. In the app you audit, open the screen in the state you want to check: a sheet open, results
       loaded.
@@ -41,6 +48,10 @@ You need:
       itself), type it in one line before pressing Enter.
 
    You get `audits/<date>/checkout/`, with the log, two screenshots and `findings.json`.
+
+   To skip the swiping, run `python3 tools/audit.py capture checkout --auto` instead: it walks every
+   element in TalkBack's order and stops when focus comes back to the first one. It activates
+   nothing, so states behind a tap still need the walk by hand.
 3. **Walk it with a keyboard** (optional, same screen). Turn TalkBack off and leave the screen as it
    was, then run `python3 tools/audit.py keyboard checkout-keyboard`. You don't need a physical
    keyboard: TAB is sent over `adb`. It stops on its own.
@@ -79,14 +90,16 @@ One APK, two components, both logging to the `A11ySpeech` tag:
   - the element with input focus (`[input]`) and each activation (`[click]`);
   - window changes (`[window]`) and announcements (`[announce]`);
   - the screen's node tree on request (`[tree]`);
+  - also on request, for the walks driven from `adb`: it moves focus into the app's window, and
+    clicks the element TalkBack is on, as a double tap does;
   - on the last request, the results of the
     [Accessibility Test Framework](https://github.com/google/Accessibility-Test-Framework-for-Android)
     (`[atf]`), the checks behind Accessibility Scanner and Compose's `enableAccessibilityChecks()`.
 
 On top of the APK:
 
-- **`tools/audit.py`**: captures a session per screen, walks it with a keyboard, and runs rules tagged
-  with their WCAG 2.2 criteria.
+- **`tools/audit.py`**: captures a session per screen (walked by you, on its own, or by an agent step
+  by step), walks it with a keyboard, and runs rules tagged with their WCAG 2.2 criteria.
 - [Claude Code](https://claude.com/claude-code) skills in `.claude/skills/`:
   - **`a11y-audit`**: turns a capture, or the screen's code when there is no device, into a report by
     WCAG criterion;
@@ -122,6 +135,7 @@ Per screen, with `tools/audit.py` (Python 3 and `adb` only):
 
 ```bash
 python3 tools/audit.py capture checkout   # dumps the tree, screenshots, shows the walk live, dumps again on Enter
+python3 tools/audit.py capture checkout --auto   # the same, walking with TalkBack on its own
 python3 tools/audit.py keyboard checkout  # walks the screen with TAB, TalkBack off
 python3 tools/audit.py rules audits/2026-10-01/checkout   # re-run the rules on an existing capture
 ```
@@ -140,6 +154,44 @@ app.
 `keyboard` is for people who use a hardware keyboard (motor disabilities, tablets with a keyboard, Chromebooks, desktop modes), so turn TalkBack off first. Switch Access doesn't use keyboard focus: it walks the accessibility tree, like TalkBack. It presses TAB, dumps the tree
 and takes a screenshot after each key (`keyboard/step-NN.png`), and stops when focus cycles back or
 stops moving. Arrow-key navigation (carousels, grids) isn't walked.
+
+### Driving TalkBack
+
+`adb shell input` can't move TalkBack: it injects keys and touches after the accessibility input
+filter, where TalkBack reads its gestures and keyboard shortcuts, so they reach the app as plain
+input. A keyboard does go through that filter. `audit.py` makes one with the `hid` tool of the
+device's shell (no root; `start` checks that it is there), and sends TalkBack's shortcuts with it:
+
+```bash
+python3 tools/audit.py talkback on              # keeps the other accessibility services
+python3 tools/audit.py start checkout           # connects the keyboard, dumps the tree, prints <out>/<date>/checkout
+python3 tools/audit.py press first              # TalkBack's first element in the window
+python3 tools/audit.py press next --times 30    # stops early with "walk ended: cycle|stopped|left app"
+python3 tools/audit.py press activate           # what a double tap does
+python3 tools/audit.py look                     # screenshot, prints its path
+python3 tools/audit.py stop                     # dumps again, disconnects, saves and runs the rules
+python3 tools/audit.py talkback off
+```
+
+Each `press` prints what it produced: the focus (with its `actions`), what TalkBack said or
+`(nothing spoken)`, clicks and window changes, or `(focus didn't move)`. `start` takes `--out` like
+`capture`. `capture --auto` runs `start`, `first`, `next` until the walk ends, and `stop`.
+`press`, `look` and `stop` act on the session `start` opened, or on `--dir`. To go back or type, use
+`adb` directly: `adb shell input keyevent KEYCODE_BACK`, `adb shell input text …`. An injected
+`adb shell input tap` reaches the app as a plain tap, also with TalkBack on.
+
+What to know:
+- The keyboard has no letter keys, so Android doesn't count it as a keyboard in the configuration
+  and connecting it doesn't recreate the screen. Without letters TalkBack has no shortcut to
+  activate, so the focus logger clicks the element TalkBack is on instead (`ACTION_CLICK`, what
+  TalkBack's double tap sends).
+- TalkBack's hints name the keyboard's selection key instead of a double tap. That comes from the
+  keyboard, not from the app.
+- `start` moves focus into the app's window before the session begins, because TalkBack's "first
+  element" works within the window that has focus, which can be the navigation bar.
+- After the last element, TalkBack goes back to the top of the window or stops moving; the walk ends
+  there. An `ORDER_JUMP` on that last move comes from the walk, not from the app.
+- `activate` clicks the whole element TalkBack is on, so links inside a text can't be opened this way.
 
 Or by hand:
 
@@ -304,7 +356,7 @@ failed, and on older captures.
 - **Speech-to-focus matching is approximate.** Each focus owns what is spoken until the next one.
   Swiping very fast can shift utterances between neighbours.
 - **Tested** so far on one device, Android 12 with a vendor build of TalkBack (13.1), including the
-  ATF results and the keyboard pass. Google's TalkBack relies on the same mechanism, the default TTS
+  ATF results, the keyboard pass and the walks driven from `adb`. Google's TalkBack relies on the same mechanism, the default TTS
   engine, but hasn't been tested yet. Reports from other devices are welcome.
 - **Not yet tested on a device**: `expanded` and `required`, which need Android 16. Rules over them
   are covered by `python3 -m unittest tools/test_audit.py`.

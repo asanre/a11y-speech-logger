@@ -1,12 +1,15 @@
 ---
 name: a11y-audit
-description: Audits the accessibility of an Android screen against WCAG 2.2 A/AA and writes a report a developer can act on. Two modes - from an a11y-speech-logger capture folder (session.txt, findings.json, screenshots), or from the screen's source code when there is no device. Use when asked to audit, analyze or report on a capture under audits/, after running `tools/audit.py capture` or `keyboard`, or to review a screen's code for accessibility. Optional argument - the path to the audited app's source repo, to locate each problem in the code.
+description: Audits the accessibility of an Android screen against WCAG 2.2 A/AA and writes a report a developer can act on. Three modes - driving TalkBack on a connected device to capture the screen itself, from an a11y-speech-logger capture folder (session.txt, findings.json, screenshots), or from the screen's source code when there is no device. Use when asked to audit a screen or app on a device, to analyze or report on a capture under audits/, after running `tools/audit.py capture` or `keyboard`, or to review a screen's code for accessibility. Optional argument - the path to the audited app's source repo, to locate each problem in the code.
 ---
 
 # Accessibility audit of a screen
 
 Pick the mode from what you have:
 
+- **Device mode**: a device connected over `adb` and no capture yet. You walk the screen with TalkBack
+  yourself, following [references/device.md](references/device.md), then continue in Capture mode on
+  the folder it produces.
 - **Capture mode**: a capture folder (`audits/<date>/<screen>/`) or a date folder with several. It shows
   what TalkBack really said and is the reliable mode.
 - **Code mode**: no capture, only the screen's source. Use it when no device is available. Every finding
@@ -40,6 +43,8 @@ The criteria, what each one asks of a native screen and what evidence answers it
 - **`screen-start.png`, `screen-end.png`**: always look at them. If the start shows another screen, the
   walk began elsewhere. Older captures have a single `screen.png`.
 - **`keyboard/step-NN.png`** (keyboard pass only): the screen after each TAB.
+- **Hints** that name the keyboard's selection key instead of a double tap mean the walk was driven
+  from `adb` (Device mode or `capture --auto`). They come from the virtual keyboard: never report them.
 - **`notes.md`**, if present: what the tester tried and couldn't do. Quote it as a *tester note*. It
   points at a problem; the capture or the code must still show where it is.
 
@@ -67,7 +72,8 @@ in the TalkBack capture's folder. The keyboard pass answers 2.1.1, 2.1.2, 2.4.7 
    - `ROLE_BEFORE_LABEL`: advisory. Report the cause, a name missing on the actionable node, not the order.
      See "Advisory, not failure" in the reference.
    - `NESTED_ACTIONABLE`: confirm in the timeline that the inner control is a separate focus stop.
-   - `ORDER_JUMP`: dismiss it if the previous step was a backwards swipe or the list scrolled.
+   - `ORDER_JUMP`: dismiss it if the previous step was a backwards swipe, the list scrolled, or a walk
+     from `adb` wrapped around from the last element to the top.
    - `FOCUS_MOVED_AFTER_ACTION`: find where focus landed in the screenshot. At the top of the screen,
      or on an unrelated element, it is a 2.4.3 failure. On the result of the action, it is fine.
    - `DUPLICATE_LABEL`: dismiss it if the speech tells the elements apart.
@@ -75,7 +81,7 @@ in the TalkBack capture's folder. The keyboard pass answers 2.1.1, 2.1.2, 2.4.7 
    - `SCREEN_TITLE` and `titles`: across several captures, the same title on different screens is also
      a failure.
    - `TEXT_CONTRAST`, `ATF:TextContrastCheck`: dismiss them on text over images or gradients, which the
-     screenshot shows. TalkBack's green focus outline can skew the focused element.
+     screenshot shows. TalkBack's focus outline (green, blue on some builds) can skew the focused element.
    - `KEYBOARD_UNREACHABLE`, `FOCUS_NOT_VISIBLE`: check the step screenshots. Elements reached with
      arrows (carousels) are *Not verified*, not failures.
    - `ATF:*`: ATF's messages are terse. Restate them as the user's problem.
