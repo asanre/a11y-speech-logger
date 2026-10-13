@@ -25,10 +25,11 @@ You need:
    ```bash
    ./gradlew :app:installDebug
    ```
-   Open **A11y Speech Logger** on the device and follow its FAQ:
-   - make it the preferred text-to-speech engine;
-   - enable **A11y Focus Logger**, with its shortcut off;
-   - turn TalkBack off and on again.
+   ```bash
+   python3 tools/audit.py setup
+   ```
+   It makes the logger the preferred text-to-speech engine, enables **A11y Focus Logger** and turns
+   TalkBack off and on again so it picks up the engine. The app's FAQ has the same steps by hand.
 
    From then on TalkBack is silent: what it says is printed in your terminal. [Setup](#setup) has the
    details. If you installed the APK before the walks driven from `adb` existed, install it again.
@@ -81,11 +82,14 @@ You need:
    - `/a11y-retest` checks one issue: paste its text and point it to a new capture, or to the code.
    - Without a device, `/a11y-audit` reviews a screen from its code:
      `/a11y-audit "checkout screen" ~/code/my-app`.
-6. **Give the device its voice back** when you're done:
+6. **Give the device back** when you're done:
    ```bash
-   adb shell settings delete secure tts_default_synth
+   python3 tools/audit.py release
    ```
-   Then turn off A11y Focus Logger in the accessibility settings.
+   It turns off A11y Focus Logger, keeping your other accessibility services, and restores the
+   default text-to-speech engine. An accessibility service left on makes Compose apps keep tracking
+   semantics changes, which skews performance measurements on the device. The agent runs it at the
+   end of a Device mode audit; run `setup` again before the next one.
 
 ## How it works
 
@@ -132,11 +136,9 @@ On top of the APK:
    services. Leave its shortcut off: on some devices enabling the shortcut turns TalkBack off.
 5. Turn TalkBack off and on again so it picks up the new engine.
 
-To restore everything, run the command below, turn the service off and pick your previous engine.
-
-```bash
-adb shell settings delete secure tts_default_synth
-```
+`python3 tools/audit.py setup` does steps 3 to 5 over `adb`. To restore everything, run
+`python3 tools/audit.py release`: it turns the service off and restores the default engine (pick your
+previous one if it wasn't the default).
 
 ## Capture
 

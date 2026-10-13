@@ -30,6 +30,13 @@
   audit.py talkback on|off [--serial SERIAL]
       Turns TalkBack on or off, keeping the other accessibility services.
 
+  audit.py setup [--serial SERIAL]
+  audit.py release [--serial SERIAL]
+      `setup` gets the device ready to capture: makes the logger the default text-to-speech engine,
+      turns A11y Focus Logger on and restarts TalkBack, if it is on, so it picks up the engine.
+      `release` gives the device back when the audit is over: turns A11y Focus Logger off and
+      restores the default text-to-speech engine. Both keep the other accessibility services.
+
   audit.py rules <dir>
       Parses <dir>/session.txt and writes <dir>/findings.json.
 
@@ -854,6 +861,18 @@ def with_service(services, component, enabled):
     return ":".join(kept + [component] if enabled else kept)
 
 
+def without_logger(services):
+    """The `enabled_accessibility_services` value without A11y Focus Logger, in its short or full form."""
+    for component in (FOCUS_LOGGER, f"{PACKAGE}/{PACKAGE}.FocusLoggerService"):
+        services = with_service(services, component, False)
+    return services
+
+
+def with_logger(services):
+    """The `enabled_accessibility_services` value with A11y Focus Logger once, others kept."""
+    return with_service(without_logger(services), FOCUS_LOGGER, True)
+
+
 def expanded(bounds, height, width):
     left, top, right, bottom = bounds
     return (max(left - FOCUS_RING_PX, 0), max(top - FOCUS_RING_PX, 0),
@@ -1055,16 +1074,43 @@ def talkback_component(serial):
     return found.group()
 
 
+def put_services(serial, value):
+    if value:
+        adb(serial, "shell", "settings", "put", "secure", "enabled_accessibility_services", value)
+        adb(serial, "shell", "settings", "put", "secure", "accessibility_enabled", "1")
+    else:
+        adb(serial, "shell", "settings", "delete", "secure", "enabled_accessibility_services")
+
+
 def talkback(args):
     services = adb(args.serial, "shell", "settings", "get", "secure", "enabled_accessibility_services")
     value = with_service(services, talkback_component(args.serial), args.state == "on")
-    if value:
-        adb(args.serial, "shell", "settings", "put", "secure", "enabled_accessibility_services", value)
-        adb(args.serial, "shell", "settings", "put", "secure", "accessibility_enabled", "1")
-    else:
-        adb(args.serial, "shell", "settings", "delete", "secure", "enabled_accessibility_services")
+    put_services(args.serial, value)
     time.sleep(2)  # TalkBack takes a moment to start or stop
     print(f"TalkBack {args.state}: {value or '(no services)'}")
+
+
+def setup(args):
+    if PACKAGE not in adb(args.serial, "shell", "pm", "list", "packages", PACKAGE):
+        sys.exit("error: A11y Speech Logger is not installed; run `./gradlew :app:installDebug`")
+    adb(args.serial, "shell", "settings", "put", "secure", "tts_default_synth", PACKAGE)
+    services = adb(args.serial, "shell", "settings", "get", "secure", "enabled_accessibility_services")
+    value = with_logger(services)
+    if "talkback" in services.casefold():  # TalkBack picks up the new engine only when it starts
+        put_services(args.serial, with_service(value, talkback_component(args.serial), False))
+        time.sleep(2)
+    put_services(args.serial, value)
+    time.sleep(2)  # the services take a moment to start
+    print(f"Logger set up: default TTS engine and A11y Focus Logger. Services: {value}")
+
+
+def release(args):
+    services = adb(args.serial, "shell", "settings", "get", "secure", "enabled_accessibility_services")
+    value = without_logger(services)
+    put_services(args.serial, value)
+    if adb(args.serial, "shell", "settings", "get", "secure", "tts_default_synth").strip() == PACKAGE:
+        adb(args.serial, "shell", "settings", "delete", "secure", "tts_default_synth")
+    print(f"A11y Focus Logger off, default TTS engine restored. Services: {value or '(none)'}")
 
 
 def start_session(serial, out, screen):
@@ -1295,6 +1341,12 @@ def main():
     tal.add_argument("state", choices=["on", "off"])
     tal.add_argument("--serial", help="adb device serial, when more than one is connected")
     tal.set_defaults(func=talkback)
+    set_ = sub.add_parser("setup", help="make the logger the TTS engine and turn A11y Focus Logger on")
+    set_.add_argument("--serial", help="adb device serial, when more than one is connected")
+    set_.set_defaults(func=setup)
+    rel = sub.add_parser("release", help="turn A11y Focus Logger off and restore the default TTS engine")
+    rel.add_argument("--serial", help="adb device serial, when more than one is connected")
+    rel.set_defaults(func=release)
     key = sub.add_parser("keyboard", help="walk a screen with TAB and check keyboard access")
     key.add_argument("screen", help="name for the screen, used as folder name")
     key.add_argument("--steps", type=int, default=60, help="maximum number of TABs (default: 60)")

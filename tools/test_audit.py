@@ -495,6 +495,31 @@ class WithServiceTest(unittest.TestCase):
         self.assertEqual(audit.with_service("null", self.TALKBACK, True), self.TALKBACK)
 
 
+class WithoutLoggerTest(unittest.TestCase):
+    TALKBACK = "com.example.talkback/com.example.talkback.TalkBackService"
+
+    def test_removes_the_full_form_and_keeps_the_other_services(self):
+        services = f"{self.TALKBACK}:io.github.asanre.a11ylogger/io.github.asanre.a11ylogger.FocusLoggerService"
+        self.assertEqual(audit.without_logger(services), self.TALKBACK)
+
+    def test_removes_the_short_form(self):
+        self.assertEqual(audit.without_logger("io.github.asanre.a11ylogger/.FocusLoggerService\n"), "")
+
+
+class WithLoggerTest(unittest.TestCase):
+    TALKBACK = "com.example.talkback/com.example.talkback.TalkBackService"
+
+    def test_adds_it_and_keeps_the_other_services(self):
+        self.assertEqual(audit.with_logger(f"{self.TALKBACK}\n"), f"{self.TALKBACK}:{audit.FOCUS_LOGGER}")
+
+    def test_adds_it_once_when_already_on_in_its_full_form(self):
+        services = "io.github.asanre.a11ylogger/io.github.asanre.a11ylogger.FocusLoggerService"
+        self.assertEqual(audit.with_logger(services), audit.FOCUS_LOGGER)
+
+    def test_no_services_set_yet(self):
+        self.assertEqual(audit.with_logger("null"), audit.FOCUS_LOGGER)
+
+
 class AtfTest(unittest.TestCase):
     SALE = "id=a class=TextView text=\"Sale\" bounds=[0,0][40,20] size=20x10dp"
 

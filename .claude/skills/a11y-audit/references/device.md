@@ -9,7 +9,9 @@ the README's "Driving TalkBack".
 - `adb devices` lists one device (pass `--serial` to `start` and `talkback` when there are several).
 - `adb shell settings get secure tts_default_synth` is `io.github.asanre.a11ylogger`, and
   `adb shell settings get secure enabled_accessibility_services` contains `FocusLoggerService`.
-  If not, stop and send the user to the README's Quick start, step 1: it is done once, on the device.
+  If not, run `python3 tools/audit.py setup`. If it says the app is not installed, stop and send the
+  user to the README's Quick start, step 1. `release` undoes the setup at the end of every audit
+  (step 5).
 - Note whether TalkBack is on (`talkback` in that list), to leave it as you found it.
 
 ## 2. Reach the screen
@@ -83,6 +85,16 @@ disconnects the keyboard.
 
 Optionally run the keyboard pass on the same screen, with TalkBack off:
 `python3 tools/audit.py keyboard <screen>-keyboard`.
+
+When you are done with the device, after the keyboard pass if you ran it, give it back:
+
+```bash
+python3 tools/audit.py release
+```
+
+It turns A11y Focus Logger off and restores the default text-to-speech engine. An accessibility
+service left on makes Compose apps keep tracking semantics changes, which skews performance
+measurements on the device. Run it even if something failed earlier.
 
 Then follow the Capture mode on the folder (and the keyboard folder).
 
