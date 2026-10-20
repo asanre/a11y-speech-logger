@@ -11,7 +11,7 @@ tracker is read or written. Use the evidence there is, best first:
 1. **A capture** taken after the fix (`audits/<date>/<screen>/`). If there is none, check whether a device
    is connected (`adb devices`).
 2. **A targeted capture.** With a device, ask the user for one and tell them exactly what to do:
-   - the command, `python3 tools/audit.py capture <screen>`, or `keyboard <screen>` for keyboard issues;
+   - the command, `a11y-audit capture <screen>`, or `keyboard <screen>` for keyboard issues;
    - the screen and state to open;
    - the elements to swipe to, in order;
    - when to press Enter.
@@ -26,7 +26,7 @@ tracker is read or written. Use the evidence there is, best first:
      [reference](../a11y-audit/references/wcag-mobile.md);
    - what passes. For example: "the sort button is read as Sort, Button, and its expanded state is spoken".
 2. **Collect the evidence.**
-   - From a capture, run `python3 tools/audit.py rules <folder>` if `findings.json` is missing, then:
+   - From a capture, run `a11y-audit rules <folder>` if `findings.json` is missing, then:
      - find the element in the timeline, the tree and the screenshot;
      - quote what TalkBack said;
      - check the findings on that element.

@@ -1,5 +1,7 @@
 """Rules over hand-written session lines. Run with `python3 -m unittest tools/test_audit.py`."""
 
+import json
+import re
 import sys
 import tempfile
 import unittest
@@ -573,6 +575,27 @@ class AtfTest(unittest.TestCase):
 
     def test_older_captures_have_no_atf(self):
         self.assertIsNone(run(*tree((1, self.SALE)))["atf"])
+
+
+class VersionCodeTest(unittest.TestCase):
+    def test_reads_it_from_dumpsys(self):
+        self.assertEqual(audit.version_code("    versionCode=2 minSdk=26 targetSdk=36\n"), 2)
+
+    def test_none_when_missing(self):
+        self.assertIsNone(audit.version_code("Unable to find package"))
+
+
+class VersionsTest(unittest.TestCase):
+    ROOT = Path(__file__).parent.parent
+
+    def test_the_apk_the_command_and_the_plugin_ship_together(self):
+        gradle = (self.ROOT / "app" / "build.gradle.kts").read_text()
+        pyproject = (self.ROOT / "pyproject.toml").read_text()
+        plugin = json.loads((self.ROOT / ".claude-plugin" / "plugin.json").read_text())
+        name = re.search(r'versionName = "(.+)"', gradle).group(1)
+        self.assertEqual(int(re.search(r"versionCode = (\d+)", gradle).group(1)), audit.APK_VERSION_CODE)
+        self.assertEqual(re.search(r'^version = "(.+)"', pyproject, re.M).group(1), name)
+        self.assertEqual(plugin["version"], name)
 
 
 if __name__ == "__main__":

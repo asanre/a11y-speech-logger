@@ -1,0 +1,14 @@
+{
+  "name": "a11y-speech-logger",
+  "description": "Android accessibility audits from what TalkBack says",
+  "owner": {
+    "name": "Antoni Sanchez"
+  },
+  "plugins": [
+    {
+      "name": "a11y-speech-logger",
+      "source": "./",
+      "description": "Audit an Android screen's accessibility from what TalkBack says"
+    }
+  ]
+}

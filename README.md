@@ -7,6 +7,47 @@ TalkBack's spoken output has no public API, and production builds don't log it. 
 anyway by being the text-to-speech engine TalkBack talks to, so it works with any TalkBack build
 that uses the system's default engine.
 
+## Install
+
+1. **The command**, `a11y-audit` (Python 3.9 or later, standard library only):
+   ```bash
+   uv tool install git+https://github.com/asanre/a11y-speech-logger
+   ```
+   `pipx install` takes the same URL. From a clone, `python3 tools/audit.py` is the same command.
+2. **The APK**, from the [release](https://github.com/asanre/a11y-speech-logger/releases) that matches
+   the command (`a11y-audit setup` checks it): `adb install -r a11y-speech-logger-<version>.apk`. If
+   it fails because the signature doesn't match, `adb uninstall io.github.asanre.a11ylogger` first.
+   From a clone, `./gradlew :app:installDebug`.
+3. **The skills**, in `skills/`, for your agent:
+   - Claude Code: `claude plugin marketplace add asanre/a11y-speech-logger`, then
+     `claude plugin install a11y-speech-logger@a11y-speech-logger`. Skills are namespaced:
+     `/a11y-speech-logger:a11y-audit`.
+   - GitHub Copilot CLI: `copilot plugin marketplace add asanre/a11y-speech-logger`, then
+     `copilot plugin install a11y-speech-logger@a11y-speech-logger`.
+   - VS Code: add `"chat.plugins.marketplaces": ["asanre/a11y-speech-logger"]` (experimental) and
+     install it from the Extensions view (`@agentPlugins`).
+   - OpenCode: clone the repo and link each folder of `skills/` into `~/.config/opencode/skills/`.
+   - Any other agent that reads [Agent Skills](https://agentskills.io): link them into
+     `~/.agents/skills/`, which OpenCode, Copilot and VS Code also read, so don't combine it with the
+     plugin in those, or the skills load twice.
+
+   The examples below use the skills' short names, such as `/a11y-audit`. If your agent doesn't take
+   it, use the plugin's prefix: `/a11y-speech-logger:a11y-audit`.
+
+For a team, commit this in the app's `.claude/settings.json` (Claude Code and VS Code read it), and
+add `audits/` to the app's `.gitignore`, since captures hold screenshots of the app:
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "a11y-speech-logger": { "source": { "source": "github", "repo": "asanre/a11y-speech-logger" } }
+  },
+  "enabledPlugins": { "a11y-speech-logger@a11y-speech-logger": true }
+}
+```
+
+For a whole organization, a claude.ai Owner can sync this repo in the organization's plugin catalog.
+
 ## Quick start
 
 You need:
@@ -14,43 +55,39 @@ You need:
   checks), connected with USB debugging on: `adb devices` must list it. For the walks driven from
   `adb` (by the agent or `--auto`), its shell also needs the `hid` tool; `start` checks it. Tested on
   Android 12 so far;
-- JDK 17 or later and the Android SDK, to build the APK. Gradle finds the SDK through `ANDROID_HOME`
-  or `sdk.dir` in `local.properties`, which Android Studio writes when it opens the project;
-- Python 3.9 or later, and `adb` on the `PATH`;
-- an LLM agent that can read files and run commands. The skills are written for
-  [Claude Code](https://claude.com/claude-code); any other agent can follow them by reading their
-  `SKILL.md`.
+- what [Install](#install) sets up, and `adb` on the `PATH`. To build the APK yourself, JDK 17 or later
+  and the Android SDK (`ANDROID_HOME` or `sdk.dir` in `local.properties`);
+- an LLM agent that can run commands, with the skills installed: Claude Code, GitHub Copilot (CLI or
+  VS Code), OpenCode, or any agent that reads Agent Skills.
 
 1. **Set up the device**, once:
    ```bash
-   ./gradlew :app:installDebug
-   ```
-   ```bash
-   python3 tools/audit.py setup
+   a11y-audit setup
    ```
    It makes the logger the preferred text-to-speech engine, enables **A11y Focus Logger** and turns
    TalkBack off and on again so it picks up the engine. The app's FAQ has the same steps by hand.
 
    From then on TalkBack is silent: what it says is printed in your terminal. [Setup](#setup) has the
-   details. If you installed the APK before the walks driven from `adb` existed, install it again.
+   details. If the installed APK doesn't match the command, `setup` stops and says which one to
+   install.
 
    **Or let the agent do steps 2 to 4.** Open the screen on the device and ask, with the agent started
-   in this repo:
-   - Claude Code: `/a11y-audit audit the screen open on my device ~/code/my-app`;
-   - another agent: *"Read `.claude/skills/a11y-audit/SKILL.md`, and the files and skills it names,
-     and follow its Device mode on the screen open on my device. The app's source is in
-     `~/code/my-app`."*
+   in the app's repo:
+   - with slash commands (Claude Code, Copilot):
+     `/a11y-audit audit the screen open on my device ~/code/my-app`;
+   - otherwise: *"Use the a11y-audit skill in Device mode on the screen open on my device. The app's
+     source is in `~/code/my-app`."*
 
    The source path is optional. The agent walks the screen with TalkBack, activates what changes the
    screen's state, and writes `audits/<date>/<screen>/report.md` next to the capture. It asks before
    activating anything that buys, sends, deletes or changes the account. It runs many `adb` and
-   `python3 tools/audit.py` commands: allow them, or be ready to approve each one, or it stops at the
+   `a11y-audit` commands: allow them, or be ready to approve each one, or it stops at the
    first it can't run (then what it couldn't activate is listed as not tested). See
    [Driving TalkBack](#driving-talkback).
 2. **Capture a screen with TalkBack on.**
    1. In the app you audit, open the screen in the state you want to check: a sheet open, results
       loaded.
-   2. Run `python3 tools/audit.py capture checkout`. The name only names the folder.
+   2. Run `a11y-audit capture checkout`. The name only names the folder.
    3. Swipe right through every element, top to bottom, following along in the terminal. Double-tap
       what you want to test (a chip, a dropdown), and keep swiping in the state it leads to. Stay on
       this screen.
@@ -59,20 +96,19 @@ You need:
 
    You get `audits/<date>/checkout/`, with the log, two screenshots and `findings.json`.
 
-   To skip the swiping, run `python3 tools/audit.py capture checkout --auto` instead: it walks every
+   To skip the swiping, run `a11y-audit capture checkout --auto` instead: it walks every
    element in TalkBack's order and stops when focus comes back to the first one. It activates
    nothing, so states behind a tap still need the walk by hand.
 3. **Walk it with a keyboard** (optional, same screen). Turn TalkBack off and leave the screen as it
-   was, then run `python3 tools/audit.py keyboard checkout-keyboard`. You don't need a physical
+   was, then run `a11y-audit keyboard checkout-keyboard`. You don't need a physical
    keyboard: TAB is sent over `adb`. It stops on its own.
-4. **Ask for the report**, with the agent started in this repo:
-   - Claude Code:
+4. **Ask for the report**, with the agent started in the app's repo:
+   - with slash commands:
      ```
      /a11y-audit audits/<date>/checkout audits/<date>/checkout-keyboard ~/code/my-app
      ```
-   - Another agent: *"Read `.claude/skills/a11y-audit/SKILL.md`, and the skills it names in
-     `.claude/skills/`, and follow it on `audits/<date>/checkout` and `audits/<date>/checkout-keyboard`.
-     The app's source is in `~/code/my-app`."*
+   - otherwise: *"Use the a11y-audit skill on `audits/<date>/checkout` and
+     `audits/<date>/checkout-keyboard`. The app's source is in `~/code/my-app`."*
 
    The source path is optional: with it, each problem points to a file and line. In Compose, that
    needs `testTagsAsResourceId` (see [Caveats](#caveats)). The agent writes `report.md` in the
@@ -84,7 +120,7 @@ You need:
      `/a11y-audit "checkout screen" ~/code/my-app`.
 6. **Give the device back** when you're done:
    ```bash
-   python3 tools/audit.py release
+   a11y-audit release
    ```
    It turns off A11y Focus Logger, keeping your other accessibility services, and restores the
    default text-to-speech engine. An accessibility service left on makes Compose apps keep tracking
@@ -111,9 +147,10 @@ One APK, two components, both logging to the `A11ySpeech` tag:
 
 On top of the APK:
 
-- **`tools/audit.py`**: captures a session per screen (walked by you, on its own, or by an agent step
-  by step), walks it with a keyboard, and runs rules tagged with their WCAG 2.2 criteria.
-- [Claude Code](https://claude.com/claude-code) skills in `.claude/skills/`:
+- **`a11y-audit`** (`tools/audit.py`): captures a session per screen (walked by you, on its own, or
+  by an agent step by step), walks it with a keyboard, and runs rules tagged with their WCAG 2.2
+  criteria.
+- Agent skills in `skills/`, also published as a plugin for Claude Code, Copilot CLI and VS Code:
   - **`a11y-audit`**: walks a screen on the device with TalkBack itself, or takes a capture you made,
     or the screen's code when there is no device, and turns it into a report by WCAG criterion;
   - **`a11y-retest`**: checks whether a reported issue is fixed;
@@ -121,7 +158,7 @@ On top of the APK:
 
 ## Setup
 
-1. Build and install: `./gradlew :app:installDebug`.
+1. Install the APK ([Install](#install), step 2).
 2. Open **A11y Speech Logger** from the launcher. Its FAQ has every step below:
    - buttons that open the right Settings screens on any device;
    - copyable `adb` commands built at runtime for that device. They use the TalkBack that is
@@ -136,19 +173,19 @@ On top of the APK:
    services. Leave its shortcut off: on some devices enabling the shortcut turns TalkBack off.
 5. Turn TalkBack off and on again so it picks up the new engine.
 
-`python3 tools/audit.py setup` does steps 3 to 5 over `adb`. To restore everything, run
-`python3 tools/audit.py release`: it turns the service off and restores the default engine (pick your
+`a11y-audit setup` does steps 3 to 5 over `adb`. To restore everything, run
+`a11y-audit release`: it turns the service off and restores the default engine (pick your
 previous one if it wasn't the default).
 
 ## Capture
 
-Per screen, with `tools/audit.py` (Python 3 and `adb` only):
+Per screen, with `a11y-audit`:
 
 ```bash
-python3 tools/audit.py capture checkout   # dumps the tree, screenshots, shows the walk live, dumps again on Enter
-python3 tools/audit.py capture checkout --auto   # the same, walking with TalkBack on its own
-python3 tools/audit.py keyboard checkout  # walks the screen with TAB, TalkBack off
-python3 tools/audit.py rules audits/2026-10-01/checkout   # re-run the rules on an existing capture
+a11y-audit capture checkout   # dumps the tree, screenshots, shows the walk live, dumps again on Enter
+a11y-audit capture checkout --auto   # the same, walking with TalkBack on its own
+a11y-audit keyboard checkout  # walks the screen with TAB, TalkBack off
+a11y-audit rules audits/2026-10-01/checkout   # re-run the rules on an existing capture
 ```
 
 `capture` warns you if the engine or the service isn't active. While you walk the screen it prints
@@ -159,8 +196,8 @@ do, which the log doesn't show. The tree is dumped at the start and again when y
 can change in between (a sheet opens, a list scrolls). The rules use the last dump, and only the
 focus of the app in that dump: the keyboard and the system UI are left out. On the last dump the
 service also runs ATF; its contrast checks need a screenshot, which an accessibility service can only
-take from Android 11 (API 30). `audits/` is gitignored because it contains screenshots of the audited
-app.
+take from Android 11 (API 30). `audits/` holds screenshots of the audited app: keep it out of git, as
+this repo does.
 
 `keyboard` is for people who use a hardware keyboard (motor disabilities, tablets with a keyboard, Chromebooks, desktop modes), so turn TalkBack off first. Switch Access doesn't use keyboard focus: it walks the accessibility tree, like TalkBack. It presses TAB, dumps the tree
 and takes a screenshot after each key (`keyboard/step-NN.png`), and stops when focus cycles back or
@@ -170,18 +207,18 @@ stops moving. Arrow-key navigation (carousels, grids) isn't walked.
 
 `adb shell input` can't move TalkBack: it injects keys and touches after the accessibility input
 filter, where TalkBack reads its gestures and keyboard shortcuts, so they reach the app as plain
-input. A keyboard does go through that filter. `audit.py` makes one with the `hid` tool of the
+input. A keyboard does go through that filter. `a11y-audit` makes one with the `hid` tool of the
 device's shell (no root; `start` checks that it is there), and sends TalkBack's shortcuts with it:
 
 ```bash
-python3 tools/audit.py talkback on              # keeps the other accessibility services
-python3 tools/audit.py start checkout           # connects the keyboard, dumps the tree, prints <out>/<date>/checkout
-python3 tools/audit.py press first              # TalkBack's first element in the window
-python3 tools/audit.py press next --times 30    # stops early with "walk ended: cycle|stopped|left app"
-python3 tools/audit.py press activate           # what a double tap does
-python3 tools/audit.py look                     # screenshot, prints its path
-python3 tools/audit.py stop                     # dumps again, disconnects, saves and runs the rules
-python3 tools/audit.py talkback off
+a11y-audit talkback on              # keeps the other accessibility services
+a11y-audit start checkout           # connects the keyboard, dumps the tree, prints <out>/<date>/checkout
+a11y-audit press first              # TalkBack's first element in the window
+a11y-audit press next --times 30    # stops early with "walk ended: cycle|stopped|left app"
+a11y-audit press activate           # what a double tap does
+a11y-audit look                     # screenshot, prints its path
+a11y-audit stop                     # dumps again, disconnects, saves and runs the rules
+a11y-audit talkback off
 ```
 
 Each `press` prints what it produced: the focus (with its `actions`), what TalkBack said or
@@ -215,8 +252,8 @@ adb logcat -d -s A11ySpeech:I -v raw > session.txt          # save and exit
 
 ## Report
 
-With Claude Code, open this repo and ask for the audit, optionally pointing to the app's source so
-each finding is located by its test tag:
+With the agent started in the app's repo, ask for the audit, optionally pointing to the app's source
+so each finding is located by its test tag:
 
 ```
 /a11y-audit audits/2026-10-01/checkout ~/code/my-app
@@ -374,6 +411,31 @@ failed, and on older captures.
   engine, but hasn't been tested yet. Reports from other devices are welcome.
 - **Not yet tested on a device**: `expanded` and `required`, which need Android 16. Rules over them
   are covered by `python3 -m unittest tools/test_audit.py`.
+
+## Releasing
+
+The APK, the command and the skills ship together, and the command and the skills install from
+`main`, so a version bump on `main` and its release go out in one step:
+
+1. Bump `versionCode` and `versionName` in `app/build.gradle.kts`, `APK_VERSION_CODE` in
+   `tools/audit.py`, and `version` in `pyproject.toml` and `.claude-plugin/plugin.json`.
+   `python3 -m unittest tools/test_audit.py` fails if they disagree.
+2. Commit, then build, push `main` with the tag, and publish the APK:
+   ```bash
+   ./gradlew :app:assembleDebug
+   ```
+   ```bash
+   cp app/build/outputs/apk/debug/app-debug.apk a11y-speech-logger-<version>.apk
+   ```
+   ```bash
+   git tag v<version> && git push origin main v<version>
+   ```
+   ```bash
+   gh release create v<version> a11y-speech-logger-<version>.apk
+   ```
+
+The APK is signed with the debug key of the machine that builds it; build every release on the same
+one, or installs over the previous release fail.
 
 ## License
 

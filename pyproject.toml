@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "a11y-speech-logger"
+version = "0.2.0"
+description = "Capture what TalkBack says on an Android screen and check it against WCAG 2.2"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+
+[project.urls]
+Homepage = "https://github.com/asanre/a11y-speech-logger"
+
+[project.scripts]
+a11y-audit = "audit:main"
+
+[tool.setuptools]
+package-dir = { "" = "tools" }
+py-modules = ["audit"]

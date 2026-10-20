@@ -1,43 +1,43 @@
 #!/usr/bin/env python3
 """Capture an accessibility session per screen and run deterministic rules over it.
 
-  audit.py capture <screen> [--out audits] [--serial SERIAL]
+  a11y-audit capture <screen> [--out audits] [--serial SERIAL]
       Clears logcat, dumps the node tree and takes a screenshot (screen-start.png), shows
       focus and speech live while you walk the screen with TalkBack, dumps and screenshots
       again when you press Enter (screen-end.png), runs the Accessibility Test Framework checks on
       that last dump, then saves session.txt and runs `rules`. A line typed before Enter is saved
       as notes.md, for the tester's own observations.
 
-  audit.py keyboard <screen> [--steps 60] [--out audits] [--serial SERIAL]
+  a11y-audit keyboard <screen> [--steps 60] [--out audits] [--serial SERIAL]
       Walks the screen with TAB, as a keyboard user without TalkBack: dumps the tree and takes a
       screenshot (keyboard/step-NN.png) after each key, stops when focus cycles or stops moving,
       then saves session.txt and runs `rules`.
 
-  audit.py capture <screen> --auto [--steps 60] [--out audits] [--serial SERIAL]
+  a11y-audit capture <screen> --auto [--steps 60] [--out audits] [--serial SERIAL]
       Walks the screen with TalkBack on its own, from its first element until focus comes back to it,
       without activating anything. Same output as `capture`, without notes.md.
 
-  audit.py start <screen> [--out audits] [--serial SERIAL]
-  audit.py press next|prev|first|activate [--times N] [--dir DIR]
-  audit.py look [--dir DIR]
-  audit.py stop [--dir DIR]
+  a11y-audit start <screen> [--out audits] [--serial SERIAL]
+  a11y-audit press next|prev|first|activate [--times N] [--dir DIR]
+  a11y-audit look [--dir DIR]
+  a11y-audit stop [--dir DIR]
       The same capture, one step per call, for an agent that drives TalkBack itself. `start` connects
       a virtual keyboard (the system's `hid` tool) whose keys TalkBack takes as its shortcuts and dumps
       the tree; `press` sends a shortcut and prints what it produced; `look` saves a screenshot;
       `stop` dumps again, disconnects the keyboard, saves session.txt and runs `rules`. Without
       --dir they act on the session `start` opened.
 
-  audit.py talkback on|off [--serial SERIAL]
+  a11y-audit talkback on|off [--serial SERIAL]
       Turns TalkBack on or off, keeping the other accessibility services.
 
-  audit.py setup [--serial SERIAL]
-  audit.py release [--serial SERIAL]
+  a11y-audit setup [--serial SERIAL]
+  a11y-audit release [--serial SERIAL]
       `setup` gets the device ready to capture: makes the logger the default text-to-speech engine,
       turns A11y Focus Logger on and restarts TalkBack, if it is on, so it picks up the engine.
       `release` gives the device back when the audit is over: turns A11y Focus Logger off and
       restores the default text-to-speech engine. Both keep the other accessibility services.
 
-  audit.py rules <dir>
+  a11y-audit rules <dir>
       Parses <dir>/session.txt and writes <dir>/findings.json.
 
 Only needs Python 3 and adb. The log format is described in the README.
@@ -64,6 +64,9 @@ FOCUS_LOGGER = f"{PACKAGE}/.FocusLoggerService"
 FOCUS_WINDOW_ACTION = f"{PACKAGE}.FOCUS_WINDOW"
 ACTIVATE_ACTION = f"{PACKAGE}.ACTIVATE"
 LOG_TAG = "A11ySpeech"
+# The APK this script talks to; bump it with versionCode in app/build.gradle.kts.
+APK_VERSION_CODE = 2
+RELEASES = "https://github.com/asanre/a11y-speech-logger/releases"
 ACTIVE_SESSION = Path.home() / ".cache" / "a11y-speech-logger" / "active"
 
 # Focus followed by no speech for this long means TalkBack said nothing for it, not that the
@@ -1090,9 +1093,19 @@ def talkback(args):
     print(f"TalkBack {args.state}: {value or '(no services)'}")
 
 
+def version_code(dumpsys):
+    match = re.search(r"versionCode=(\d+)", dumpsys)
+    return int(match.group(1)) if match else None
+
+
 def setup(args):
+    install = (f"install the APK of the matching release from {RELEASES} (`adb install -r <apk>`), "
+               "or run `./gradlew :app:installDebug` from a clone")
     if PACKAGE not in adb(args.serial, "shell", "pm", "list", "packages", PACKAGE):
-        sys.exit("error: A11y Speech Logger is not installed; run `./gradlew :app:installDebug`")
+        sys.exit(f"error: A11y Speech Logger is not installed; {install}")
+    installed = version_code(adb(args.serial, "shell", "dumpsys", "package", PACKAGE))
+    if installed != APK_VERSION_CODE:
+        sys.exit(f"error: A11y Speech Logger {installed} is installed, a11y-audit needs {APK_VERSION_CODE}; {install}")
     adb(args.serial, "shell", "settings", "put", "secure", "tts_default_synth", PACKAGE)
     services = adb(args.serial, "shell", "settings", "get", "secure", "enabled_accessibility_services")
     value = with_logger(services)
@@ -1121,7 +1134,7 @@ def start_session(serial, out, screen):
     warn_if_not_ready(serial)
     services = adb(serial, "shell", "settings", "get", "secure", "enabled_accessibility_services")
     if "talkback" not in services.casefold():
-        sys.exit("error: TalkBack is off; turn it on with `audit.py talkback on`")
+        sys.exit("error: TalkBack is off; turn it on with `a11y-audit talkback on`")
     if not adb(serial, "shell", "command -v hid || true").strip():
         sys.exit("error: this device has no `hid` tool, so TalkBack can't be driven; walk it by hand with `capture`")
     folder = output_dir(out, screen).resolve()

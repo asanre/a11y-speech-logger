@@ -8,3 +8,4 @@ local.properties
 __pycache__/
 # Captures contain screenshots and text of the audited app.
 audits/
+*.egg-info/

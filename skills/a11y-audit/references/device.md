@@ -1,17 +1,19 @@
 # Device mode: drive the capture yourself
 
 You walk the screen with TalkBack from `adb`, as a TalkBack user would, then audit the folder you
-produced with the Capture mode. Run every command from the repo root. How the walk works and why is in
-the README's "Driving TalkBack".
+produced with the Capture mode. Captures go to `audits/` in the current folder: run the commands from
+the audited app's repo, or pass `--out`. How the walk works and why is in the README's
+[Driving TalkBack](https://github.com/asanre/a11y-speech-logger#driving-talkback).
 
 ## 1. Check the device
 
 - `adb devices` lists one device (pass `--serial` to `start` and `talkback` when there are several).
 - `adb shell settings get secure tts_default_synth` is `io.github.asanre.a11ylogger`, and
   `adb shell settings get secure enabled_accessibility_services` contains `FocusLoggerService`.
-  If not, run `python3 tools/audit.py setup`. If it says the app is not installed, stop and send the
-  user to the README's Quick start, step 1. `release` undoes the setup at the end of every audit
-  (step 5).
+  If not, run `a11y-audit setup`. If it says the app is not installed or needs another version,
+  stop and give the user the install line it prints. If `a11y-audit` isn't found, send the user to
+  the README's [Install](https://github.com/asanre/a11y-speech-logger#install). `release` undoes the setup at the
+  end of every audit (step 5).
 - Note whether TalkBack is on (`talkback` in that list), to leave it as you found it.
 
 ## 2. Reach the screen
@@ -27,11 +29,11 @@ Never sign in, type credentials or fill personal data: ask the user to do it.
 ## 3. Walk it
 
 ```bash
-python3 tools/audit.py talkback on        # if it was off
-python3 tools/audit.py start <screen>     # --out <folder> to write elsewhere than audits/
-python3 tools/audit.py look               # check that the screen is the right one
-python3 tools/audit.py press first
-python3 tools/audit.py press next --times 40
+a11y-audit talkback on        # if it was off
+a11y-audit start <screen>     # --out <folder> to write elsewhere than audits/
+a11y-audit look               # check that the screen is the right one
+a11y-audit press first
+a11y-audit press next --times 40
 ```
 
 - `start` prints the capture folder: `<out>/<date>/<screen>/`. Before the session begins it puts
@@ -76,20 +78,20 @@ while walking*, never as a tester note.
 ## 5. Close
 
 ```bash
-python3 tools/audit.py stop
-python3 tools/audit.py talkback off      # if it was off before
+a11y-audit stop
+a11y-audit talkback off      # if it was off before
 ```
 
 `stop` prints the folder and the findings. If anything failed before `stop`, run `stop` anyway: it
 disconnects the keyboard.
 
 Optionally run the keyboard pass on the same screen, with TalkBack off:
-`python3 tools/audit.py keyboard <screen>-keyboard`.
+`a11y-audit keyboard <screen>-keyboard`.
 
 When you are done with the device, after the keyboard pass if you ran it, give it back:
 
 ```bash
-python3 tools/audit.py release
+a11y-audit release
 ```
 
 It turns A11y Focus Logger off and restores the default text-to-speech engine. An accessibility
@@ -111,6 +113,6 @@ Then follow the Capture mode on the folder (and the keyboard folder).
 ## If it can't run
 
 - `start` says the device has no `hid` tool: ask the user to walk the screen by hand with
-  `python3 tools/audit.py capture <screen>` (README, Quick start, step 2), then continue with the
-  Capture mode.
+  `a11y-audit capture <screen>` ([README, Quick start](https://github.com/asanre/a11y-speech-logger#quick-start),
+  step 2), then continue with the Capture mode.
 - No device: use the Code mode.

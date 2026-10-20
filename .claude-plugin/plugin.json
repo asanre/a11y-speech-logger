@@ -1,0 +1,8 @@
+{
+  "name": "a11y-speech-logger",
+  "version": "0.2.0",
+  "description": "Audit an Android screen's accessibility from what TalkBack says: device walks, capture reports by WCAG 2.2 criterion, retests and Compose fixes",
+  "author": { "name": "Antoni Sanchez" },
+  "repository": "https://github.com/asanre/a11y-speech-logger",
+  "license": "MIT"
+}

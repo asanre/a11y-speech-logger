@@ -1,6 +1,6 @@
 ---
 name: a11y-audit
-description: Audits the accessibility of an Android screen against WCAG 2.2 A/AA and writes a report a developer can act on. Three modes - driving TalkBack on a connected device to capture the screen itself, from an a11y-speech-logger capture folder (session.txt, findings.json, screenshots), or from the screen's source code when there is no device. Use when asked to audit a screen or app on a device, to analyze or report on a capture under audits/, after running `tools/audit.py capture` or `keyboard`, or to review a screen's code for accessibility. Optional argument - the path to the audited app's source repo, to locate each problem in the code.
+description: Audits the accessibility of an Android screen against WCAG 2.2 A/AA and writes a report a developer can act on. Three modes - driving TalkBack on a connected device to capture the screen itself, from an a11y-speech-logger capture folder (session.txt, findings.json, screenshots), or from the screen's source code when there is no device. Use when asked to audit a screen or app on a device, to analyze or report on a capture under audits/, after running `a11y-audit capture` or `keyboard`, or to review a screen's code for accessibility. Optional argument - the path to the audited app's source repo, to locate each problem in the code.
 ---
 
 # Accessibility audit of a screen
@@ -22,7 +22,7 @@ The criteria, what each one asks of a native screen and what evidence answers it
 
 ### Input
 
-- **`findings.json`**, the output of `tools/audit.py rules`:
+- **`findings.json`**, the output of `a11y-audit rules`:
   - `package`: the audited app;
   - `findings`: each one with `rule`, `severity`, `wcag`, `conformance` (`failure` or `advisory`),
     `source` (`tree`, `focus`, `speech`, `screenshot`, `keyboard` or `atf`), the `node`, a `detail`, and
@@ -39,7 +39,7 @@ The criteria, what each one asks of a native screen and what evidence answers it
   - `keyboard` (keyboard pass only): the input-focus `sequence` and its `ending` (`cycle` or `stuck`).
     A `null` in `sequence` is a TAB that stopped on something the tree doesn't expose.
 - **`session.txt`**: the raw log. Read it only when `findings.json` is not enough. The format is in the
-  repo's README ("Log format").
+  README's [Log format](https://github.com/asanre/a11y-speech-logger#log-format).
 - **`screen-start.png`, `screen-end.png`**: always look at them. If the start shows another screen, the
   walk began elsewhere. Older captures have a single `screen.png`.
 - **`keyboard/step-NN.png`** (keyboard pass only): the screen after each TAB.
@@ -114,7 +114,7 @@ in the TalkBack capture's folder. The keyboard pass answers 2.1.1, 2.1.2, 2.4.7 
    - merging (`mergeDescendants`, `clearAndSetSemantics`), headings and `paneTitle`;
    - `liveRegion`, traversal and target sizes.
 3. Mark each finding *from code, not verified on device*, with `path:line`. Name the capture that would
-   confirm it, for example: `python3 tools/audit.py capture <screen>`, then swipe to the sort button.
+   confirm it, for example: `a11y-audit capture <screen>`, then swipe to the sort button.
 4. In the conformance table, contrast, focus visibility and anything that depends on runtime state are
    *Not tested*, unless the code makes them certain (a hard-coded colour pair).
 
