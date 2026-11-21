@@ -31,7 +31,8 @@ The criteria, what each one asks of a native screen and what evidence answers it
   - `timeline`: each focused element with what TalkBack said for it;
   - `tree`: the last node dump, which matches `screen-end.png`;
   - `titles`: the titles TalkBack can announce for the screen;
-  - `appeared`: text that showed up during the walk and was never spoken or focused;
+  - `appeared`: text that showed up during the walk and was never spoken or focused, or that an
+    activation brought and TalkBack didn't say before the next key;
   - `atf`: the Accessibility Test Framework run on the last dump. `results` without `skipped` means
     every check ran, contrast included; `skipped: contrast` with a `reason` means there was no
     screenshot; `error` means no results. `null` in captures taken before ATF was added. Text that only
@@ -72,10 +73,15 @@ in the TalkBack capture's folder. The keyboard pass answers 2.1.1, 2.1.2, 2.4.7 
    - `ROLE_BEFORE_LABEL`: advisory. Report the cause, a name missing on the actionable node, not the order.
      See "Advisory, not failure" in the reference.
    - `NESTED_ACTIONABLE`: confirm in the timeline that the inner control is a separate focus stop.
-   - `ORDER_JUMP`: dismiss it if the previous step was a backwards swipe, the list scrolled, or a walk
-     from `adb` wrapped around from the last element to the top.
-   - `FOCUS_MOVED_AFTER_ACTION`: find where focus landed in the screenshot. At the top of the screen,
-     or on an unrelated element, it is a 2.4.3 failure. On the result of the action, it is fine.
+   - `ORDER_JUMP`: dismiss it if the previous step was a backwards swipe, the list scrolled, the
+     keyboard opened, or a walk from `adb` wrapped around from the last element to the top.
+   - `FOCUS_MOVED_AFTER_ACTION`: the app moved focus after an activation. The detail says where it
+     landed, how long after, and whether the activated element left the screen. On the result of the
+     action (the new message, the opened section) it is fine. On anything else it is a 2.4.3 failure:
+     the top of the screen, a text field, an unrelated element. A user who can't see doesn't know
+     where they are or what the action did.
+   - `FOCUS_BOUNCED`, `FOCUS_LOST`: failures. Focus moved several times on its own, or the activated
+     element left and nothing took focus. Report what the user hears, from the timeline.
    - `DUPLICATE_LABEL`: dismiss it if the speech tells the elements apart.
    - `LIST_SEMANTICS`: check in the screenshot that it is a visual list.
    - `SCREEN_TITLE` and `titles`: across several captures, the same title on different screens is also
