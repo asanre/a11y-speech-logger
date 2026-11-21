@@ -14,8 +14,8 @@ requires-python = ">=3.9"
 Homepage = "https://github.com/asanre/a11y-speech-logger"
 
 [project.scripts]
-a11y-audit = "audit:main"
+a11y-audit = "a11y_audit.cli:main"
 
 [tool.setuptools]
 package-dir = { "" = "tools" }
-py-modules = ["audit"]
+packages = ["a11y_audit"]
