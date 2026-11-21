@@ -636,6 +636,26 @@ class TalkbackKeysTest(unittest.TestCase):
         self.assertEqual(release, [0] * 8)
 
 
+class ContinuedRecordsTest(unittest.TestCase):
+    """A log entry holds about 4 KB, so the app splits a longer record over `[more]` entries."""
+
+    def test_a_record_split_by_the_app_is_read_as_one(self):
+        lines = [
+            '[tree] t=5       id=- class=TextView text="Terms of the',
+            "[more] t=5  service apply",
+            '[more] t=5 " bounds=[0,0][96,96] size=48x48dp',
+            "[tree] t=5 end nodes=1",
+        ]
+        first, end = [audit.parse_record(line) for line in audit.joined(lines)]
+        self.assertEqual(first["text"], "Terms of the service apply")
+        self.assertEqual(first["bounds"], [0, 0, 96, 96])
+        self.assertEqual(end["marker"], "end nodes=1")
+
+    def test_lines_without_continuations_are_kept(self):
+        lines = ['[speech] t=1 "Hi"', "--------- beginning of main", '[speech] t=2 "Bye"']
+        self.assertEqual(audit.joined(lines), lines)
+
+
 class VersionsTest(unittest.TestCase):
     ROOT = Path(__file__).parent.parent
 
