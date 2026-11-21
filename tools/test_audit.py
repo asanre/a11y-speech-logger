@@ -636,6 +636,139 @@ class TalkbackKeysTest(unittest.TestCase):
         self.assertEqual(release, [0] * 8)
 
 
+OPTION = 'id=opt class=Button text="Shipping" clickable bounds=[0,800][400,896] size=200x48dp'
+FIELD = 'id=field class=EditText text="" clickable bounds=[0,900][400,996] size=200x48dp'
+CLOSE = 'id=close class=Button desc="Close" clickable bounds=[0,0][96,96] size=48x48dp'
+
+
+def dump(t, *nodes):
+    return [f'[tree] t={t} begin pkg={PKG} window="Chat"'] + [f"[tree] t={t} {n}" for n in nodes] + [f"[tree] t={t} end nodes=0"]
+
+
+class FocusAfterActivationTest(unittest.TestCase):
+    """In a walk driven from adb every key press is logged, so focus that moves between an
+    activation and the next key was moved by the app, however late."""
+
+    def test_focus_moved_by_the_app_two_seconds_later(self):
+        result = run(
+            *dump(1, OPTION, FIELD),
+            "[key] t=400 action=next",
+            f"[click] t=500 pkg={PKG} {OPTION}",
+            f"[focus] t=2600 pkg={PKG} {FIELD}",
+        )
+        [f] = rules(result, "FOCUS_MOVED_AFTER_ACTION")
+        self.assertIn("'Shipping'", f["detail"])
+        self.assertIn("2100 ms later", f["detail"])
+
+    def test_two_seconds_later_is_a_swipe_when_keys_are_not_logged(self):
+        result = run(
+            *dump(1, OPTION, FIELD),
+            f"[click] t=500 pkg={PKG} {OPTION}",
+            f"[focus] t=2600 pkg={PKG} {FIELD}",
+        )
+        self.assertEqual(rules(result, "FOCUS_MOVED_AFTER_ACTION"), [])
+
+    def test_focus_moved_by_the_next_key_is_expected(self):
+        result = run(
+            *dump(1, OPTION, FIELD),
+            f"[click] t=500 pkg={PKG} {OPTION}",
+            "[key] t=500 action=next",
+            f"[focus] t=2600 pkg={PKG} {FIELD}",
+        )
+        self.assertEqual(rules(result, "FOCUS_MOVED_AFTER_ACTION"), [])
+
+    def test_says_when_the_activated_element_left_the_screen(self):
+        result = run(
+            *dump(1, OPTION, FIELD),
+            "[key] t=400 action=next",
+            f"[click] t=500 pkg={PKG} {OPTION}",
+            f"[focus] t=2600 pkg={PKG} {FIELD}",
+            *dump(3000, FIELD),
+        )
+        [f] = rules(result, "FOCUS_MOVED_AFTER_ACTION")
+        self.assertIn("which left the screen", f["detail"])
+
+    def test_focus_that_moves_twice_on_its_own_bounced(self):
+        result = run(
+            *dump(1, OPTION, FIELD, CLOSE),
+            "[key] t=400 action=next",
+            f"[click] t=500 pkg={PKG} {OPTION}",
+            f"[focus] t=700 pkg={PKG} {FIELD}",
+            f"[focus] t=1500 pkg={PKG} {CLOSE}",
+        )
+        [f] = rules(result, "FOCUS_BOUNCED")
+        self.assertEqual(f["conformance"], "failure")
+        self.assertIn("2 times", f["detail"])
+        self.assertIn("'Close'", f["detail"])
+
+    def test_focus_is_lost_when_the_activated_element_leaves_and_nothing_takes_it(self):
+        result = run(
+            *dump(1, OPTION, FIELD),
+            "[key] t=400 action=next",
+            f"[click] t=500 pkg={PKG} {OPTION}",
+            *dump(3000, FIELD),
+        )
+        [f] = rules(result, "FOCUS_LOST")
+        self.assertEqual(f["wcag"], ["2.4.3"])
+        self.assertIn("'Shipping'", f["detail"])
+        self.assertEqual(rules(result, "FOCUS_MOVED_AFTER_ACTION"), [])
+
+    def test_focus_is_not_lost_while_the_activated_element_stays(self):
+        result = run(
+            *dump(1, OPTION, FIELD),
+            "[key] t=400 action=next",
+            f"[click] t=500 pkg={PKG} {OPTION}",
+            *dump(3000, OPTION, FIELD),
+        )
+        self.assertEqual(rules(result, "FOCUS_LOST"), [])
+
+
+REPLY = 'id=- class=TextView text="Thanks, an agent will write today" bounds=[0,600][400,696] size=200x48dp'
+
+
+class DrivenWalkTest(unittest.TestCase):
+    """What the logged keys of a walk driven from adb let the rules tell apart."""
+
+    TOP = f"[focus] t=20 pkg={PKG} {CLOSE}"
+    BOTTOM = f"[focus] t=10 pkg={PKG} {OPTION}"
+
+    def test_going_back_to_the_first_element_is_not_an_order_jump(self):
+        result = run(*dump(1, CLOSE, OPTION), "[key] t=5 action=next", self.BOTTOM, "[key] t=10 action=first", self.TOP)
+        self.assertEqual(rules(result, "ORDER_JUMP"), [])
+
+    def test_going_to_the_previous_element_is_not_an_order_jump(self):
+        result = run(*dump(1, CLOSE, OPTION), "[key] t=5 action=next", self.BOTTOM, "[key] t=10 action=prev", self.TOP)
+        self.assertEqual(rules(result, "ORDER_JUMP"), [])
+
+    def test_going_forward_and_landing_above_is_an_order_jump(self):
+        result = run(*dump(1, CLOSE, OPTION), "[key] t=5 action=next", self.BOTTOM, "[key] t=10 action=next", self.TOP)
+        self.assertEqual(len(rules(result, "ORDER_JUMP")), 1)
+
+    def test_text_an_activation_brought_and_talkback_did_not_say(self):
+        result = run(
+            *dump(1, OPTION, FIELD),
+            "[key] t=400 action=next",
+            f"[click] t=500 pkg={PKG} {OPTION}",
+            *dump(3000, FIELD, REPLY),
+            "[key] t=3000 action=next",
+            f"[focus] t=3500 pkg={PKG} {REPLY}",
+            '[speech] t=3510 "Thanks, an agent will write today"',
+            *dump(4000, FIELD, REPLY),
+        )
+        self.assertEqual(result["appeared"], ["Thanks, an agent will write today"])
+
+    def test_text_an_activation_brought_and_talkback_said(self):
+        result = run(
+            *dump(1, OPTION, FIELD),
+            "[key] t=400 action=next",
+            f"[click] t=500 pkg={PKG} {OPTION}",
+            '[speech] t=900 "Thanks, an agent will write today"',
+            *dump(3000, FIELD, REPLY),
+            *dump(4000, FIELD, REPLY),
+        )
+        self.assertEqual(result["appeared"], [])
+
+
 class ContinuedRecordsTest(unittest.TestCase):
     """A log entry holds about 4 KB, so the app splits a longer record over `[more]` entries."""
 
