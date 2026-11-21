@@ -56,6 +56,8 @@ RULES = {
     "LIST_SEMANTICS": {"severity": "medium", "wcag": ["1.3.1"], "conformance": "advisory"},
     "SCREEN_TITLE": {"severity": "medium", "wcag": ["2.4.2"], "conformance": "failure"},
     "FOCUS_MOVED_AFTER_ACTION": {"severity": "medium", "wcag": ["2.4.3"], "conformance": "advisory"},
+    "FOCUS_BOUNCED": {"severity": "medium", "wcag": ["2.4.3"], "conformance": "failure"},
+    "FOCUS_LOST": {"severity": "medium", "wcag": ["2.4.3"], "conformance": "failure"},
     # A failure below 3:1, which no text size passes; advisory up to 4.5:1, which large text passes.
     "TEXT_CONTRAST": {"severity": "medium", "wcag": ["1.4.3"], "conformance": "failure"},
     "FOCUS_NOT_VISIBLE": {"severity": "high", "wcag": ["2.4.7"], "conformance": "failure"},
@@ -92,7 +94,7 @@ GENERIC_CLASSES = {"View", "ViewGroup", "TextView", "ImageView"}
 RAW_MARKUP = re.compile(r"</?[A-Za-z][^>]*>|&(?:nbsp|amp|lt|gt|quot|apos|#\d+);")
 RESOURCE_KEY = re.compile(r"\b[a-z][a-z0-9_]*(?:\.[a-z0-9_]+){2,}\b")
 TOP_LEVEL_DOMAINS = {"com", "org", "net", "io", "dev", "app", "edu", "gov", "co", "uk", "es", "de", "fr", "it"}
-# Focus that moves this soon after an activation was moved by the app, not by a swipe.
+# In a capture by hand, focus that moves this soon after an activation was moved by the app, not by a swipe.
 FOCUS_AFTER_ACTION_MS = 1000
 # WCAG 1.4.3: 4.5:1 for text, 3:1 for large text (18pt, or 14pt bold).
 CONTRAST_TEXT, CONTRAST_LARGE_TEXT = 4.5, 3.0
@@ -306,22 +308,78 @@ def list_problems(tree):
             yield node, "; ".join(problems)
 
 
-def focus_moves_after_action(records, app_pkg):
-    """Each activation in the app followed within FOCUS_AFTER_ACTION_MS by focus on another element,
-    with no window change of the app in between (a new screen or dialog takes focus legitimately; the
-    keyboard opening doesn't)."""
-    for i, r in enumerate(records):
-        if r["kind"] != "click" or r.get("pkg") != app_pkg:
+def same_element(a, b):
+    return element_key(a) == element_key(b) and label(a) == label(b)
+
+
+def key_before_each_focus(records):
+    """(id of the focus record, action of the key logged since the focus before it), for each focus
+    a key of the walk produced."""
+    key = None
+    for r in records:
+        if r["kind"] == "key":
+            key = r.get("action")
+        elif r["kind"] == "focus":
+            if key:
+                yield id(r), key
+            key = None
+
+
+def until_next_move(records, i):
+    """What follows the activation at `i`, up to the user's next key or activation."""
+    after = []
+    for later in records[i + 1:]:
+        if later["kind"] in ("click", "key"):
+            break
+        after.append(later)
+    return after
+
+
+def dumps_of_app(records, app_pkg):
+    return [nodes for fields, nodes in dumps(records) if fields.get("pkg") == app_pkg]
+
+
+def activations(records, app_pkg):
+    """Each activation in the app as (click, moves, gone), up to the user's next move: the focuses that
+    landed on another element, and whether the activated element is missing from a dump taken meanwhile
+    (None without one). A walk driven from adb logs each `[key]`, so the next move is the next key or
+    click; a capture by hand doesn't, so only focus within FOCUS_AFTER_ACTION_MS counts. An activation
+    that changes the app's window is left out: a new screen or dialog takes focus legitimately; the
+    keyboard opening doesn't."""
+    driven = any(r["kind"] == "key" for r in records)
+    for i, click in enumerate(records):
+        if click["kind"] != "click" or click.get("pkg") != app_pkg:
             continue
-        for later in records[i + 1:]:
-            if later["t"] - r["t"] > FOCUS_AFTER_ACTION_MS or later["kind"] == "click":
+        after = until_next_move(records, i)
+        opened = next((n for n, r in enumerate(after) if r["kind"] == "window" and r.get("pkg") == app_pkg), None)
+        if opened is not None:
+            after = after[:opened]
+            if not any(r["kind"] == "focus" for r in after):
+                continue
+        moves = []
+        for focus in (r for r in after if r["kind"] == "focus"):
+            if not driven and focus["t"] - click["t"] > FOCUS_AFTER_ACTION_MS:
                 break
-            if later["kind"] == "window" and later.get("pkg") == app_pkg:
-                break
-            if later["kind"] == "focus":
-                if element_key(later) != element_key(r):
-                    yield r, later
-                break
+            if element_key(focus) != element_key(moves[-1] if moves else click):
+                moves.append(focus)
+        shown = dumps_of_app(after, app_pkg)
+        gone = not any(same_element(n, click) for n in shown[0]) if shown else None
+        yield click, moves, gone
+
+
+def unannounced(records, app_pkg):
+    """Text an activation brought to the screen that TalkBack neither said nor focused before the
+    user's next move, from the dumps taken before and after it."""
+    for i, click in enumerate(records):
+        if click["kind"] != "click" or click.get("pkg") != app_pkg:
+            continue
+        after = until_next_move(records, i)
+        before, shown = dumps_of_app(records[:i], app_pkg), dumps_of_app(after, app_pkg)
+        if not before or not shown:
+            continue
+        known = {label(n) for n in before[-1]} | {label(r) for r in after if r["kind"] == "focus"}
+        spoken = normalized(" ".join(r["text"] for r in after if r["kind"] in ("speech", "announce") and r.get("text")))
+        yield from (label(n) for n in shown[0] if label(n) and label(n) not in known and not was_spoken(label(n), spoken))
 
 
 def atf_findings(records, tree):
@@ -444,11 +502,16 @@ def run_rules(records, screenshot=None):
                 findings.append(finding("NO_ROLE", source, node, "no role on the node or its descendants", node["t"]))
 
     px_per_dp = density(tree + focuses)
+    driven = any(r["kind"] == "key" for r in records)
+    moved_by = dict(key_before_each_focus(records))
     if px_per_dp:
         # Consecutive in the whole sequence: a jump across the keyboard is not a reading-order jump.
         for prev, cur in zip(all_focuses, all_focuses[1:]):
             same_app = prev.get("pkg") == cur.get("pkg") == app_pkg
-            if same_app and isinstance(prev.get("bounds"), list) and isinstance(cur.get("bounds"), list):
+            # In a walk driven from adb only a forward key can show a reading-order problem: going back
+            # or to the first element moves up on purpose, and focus the app moved is another rule's.
+            forward = not driven or moved_by.get(id(cur)) == "next"
+            if same_app and forward and isinstance(prev.get("bounds"), list) and isinstance(cur.get("bounds"), list):
                 jump_dp = (prev["bounds"][1] - cur["bounds"][1]) / px_per_dp
                 if jump_dp > ORDER_JUMP_DP:
                     findings.append(finding(
@@ -461,16 +524,27 @@ def run_rules(records, screenshot=None):
     for node, detail in list_problems(tree):
         findings.append(finding("LIST_SEMANTICS", "tree", node, detail, node["t"]))
 
-    for click, focus in focus_moves_after_action(records, app_pkg):
-        jump = ""
+    for click, moves, gone in activations(records, app_pkg):
+        if not moves:
+            if gone:
+                detail = f"{name_or_place(click)} left the screen after it was activated and nothing took TalkBack's focus"
+                findings.append(finding("FOCUS_LOST", "focus", click, detail, click["t"]))
+            continue
+        focus, jump = moves[0], ""
         if isinstance(click.get("bounds"), list) and isinstance(focus.get("bounds"), list) and px_per_dp:
             dp = round((click["bounds"][1] - focus["bounds"][1]) / px_per_dp)
             jump = f", {abs(dp)}dp {'above' if dp >= 0 else 'below'}"
+        left = ", which left the screen," if gone else ","
         findings.append(finding(
             "FOCUS_MOVED_AFTER_ACTION", "focus", focus,
-            f"after activating {name_or_place(click)}, focus moved to {name_or_place(focus)}{jump}",
+            f"after activating {name_or_place(click)}{left} focus moved to {name_or_place(focus)}{jump}, "
+            f"{focus['t'] - click['t']} ms later",
             focus["t"],
         ))
+        if len(moves) > 1:
+            places = ", ".join(name_or_place(m) for m in moves)
+            detail = f"after activating {name_or_place(click)}, focus moved {len(moves)} times on its own: {places}"
+            findings.append(finding("FOCUS_BOUNCED", "focus", moves[-1], detail, moves[-1]["t"]))
 
     # Titles TalkBack can announce for the screen: the window's, the panes' and window-change texts.
     app_dumps = [(fields, nodes) for fields, nodes in all_dumps if fields.get("pkg") == app_pkg]
@@ -489,7 +563,7 @@ def run_rules(records, screenshot=None):
     appeared = sorted({
         label(n) for n in tree
         if label(n) and label(n) not in before and label(n) not in focused and not was_spoken(label(n), spoken)
-    }) if first_dump is not last_dump else []
+    } | set(unannounced(records, app_pkg))) if first_dump is not last_dump else []
 
     atf = list(atf_findings(records, tree))
     atf_keys = {(f["rule"], element_key(f["node"])) for f in atf if f["node"]}
