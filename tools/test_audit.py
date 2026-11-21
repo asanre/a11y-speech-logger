@@ -789,6 +789,91 @@ class ContinuedRecordsTest(unittest.TestCase):
         self.assertEqual(audit.joined(lines), lines)
 
 
+class AdbProblemTest(unittest.TestCase):
+    def test_no_device(self):
+        self.assertIn("no device is connected", audit.adb_problem("adb: no devices/emulators found"))
+
+    def test_several_devices(self):
+        self.assertIn("--serial", audit.adb_problem("adb: more than one device/emulator"))
+
+    def test_unauthorized(self):
+        problem = audit.adb_problem("adb: device unauthorized.\nThis adb server's $ADB_VENDOR_KEYS is not set")
+        self.assertIn("USB debugging", problem)
+
+    def test_anything_else_is_quoted(self):
+        self.assertIn("closed", audit.adb_problem("error: closed\n"))
+
+
+class WaitTest(unittest.TestCase):
+    def clock(self):
+        self.now = 0.0
+
+        def sleep(seconds):
+            self.now += seconds
+
+        return (lambda: self.now), sleep
+
+    def test_returns_as_soon_as_it_is_done(self):
+        clock, sleep = self.clock()
+        value, done = audit.wait_until(lambda: self.now, lambda v: v >= 0.3, timeout=5, clock=clock, sleep=sleep)
+        self.assertTrue(done)
+        self.assertLess(value, 0.5)
+
+    def test_gives_up_at_the_timeout(self):
+        clock, sleep = self.clock()
+        _, done = audit.wait_until(lambda: self.now, lambda v: False, timeout=1.5, clock=clock, sleep=sleep)
+        self.assertFalse(done)
+        self.assertGreaterEqual(self.now, 1.5)
+        self.assertLess(self.now, 2)
+
+    def test_quiet_waits_for_the_value_to_stop_changing(self):
+        clock, sleep = self.clock()
+        changes = iter([1, 2, 3])
+        seen = []
+
+        def read():
+            if self.now < 0.35:
+                seen.append(next(changes, 3))
+            return seen[-1] if seen else 0
+
+        audit.wait_quiet(read, quiet=0.4, timeout=5, clock=clock, sleep=sleep)
+        self.assertGreaterEqual(self.now, 0.55)
+        self.assertLess(self.now, 1.0)
+
+
+class DoctorTest(unittest.TestCase):
+    READY = {
+        "device": "emulator-5554", "apk": audit.APK_VERSION_CODE, "engine": audit.PACKAGE,
+        "services": f"{audit.FOCUS_LOGGER}:com.google.android.marvin.talkback/.TalkBackService",
+        "talkback": "com.google.android.marvin.talkback/.TalkBackService", "hid": True,
+    }
+
+    def test_everything_ready(self):
+        self.assertTrue(all(ok for ok, _ in audit.doctor_report(self.READY)))
+
+    def test_each_problem_names_its_fix(self):
+        facts = {**self.READY, "apk": None, "engine": "com.google.android.tts", "services": "null"}
+        problems = [text for ok, text in audit.doctor_report(facts) if not ok]
+        self.assertTrue(any("a11y-audit setup" in p for p in problems))
+        self.assertTrue(any("a11y-audit talkback on" in p for p in problems))
+        self.assertTrue(any("not installed" in p for p in problems))
+
+    def test_an_older_apk_is_named(self):
+        [problem] = [text for ok, text in audit.doctor_report({**self.READY, "apk": 1}) if not ok]
+        self.assertIn(f"needs {audit.APK_VERSION_CODE}", problem)
+
+
+class GotoTest(unittest.TestCase):
+    def test_matches_a_label_ignoring_case(self):
+        focus = audit.parse_record(f"[focus] t=1 pkg={PKG} {OPTION}")
+        self.assertTrue(audit.has_label(focus, "shipping"))
+        self.assertFalse(audit.has_label(focus, "billing"))
+
+    def test_an_unlabelled_element_matches_nothing(self):
+        focus = audit.parse_record(f"[focus] t=1 pkg={PKG} id=- class=View clickable bounds=[0,0][96,96] size=48x48dp")
+        self.assertFalse(audit.has_label(focus, ""))
+
+
 class VersionsTest(unittest.TestCase):
     ROOT = Path(__file__).parent.parent
 
@@ -800,6 +885,7 @@ class VersionsTest(unittest.TestCase):
         self.assertEqual(int(re.search(r"versionCode = (\d+)", gradle).group(1)), audit.APK_VERSION_CODE)
         self.assertEqual(re.search(r'^version = "(.+)"', pyproject, re.M).group(1), name)
         self.assertEqual(plugin["version"], name)
+        self.assertEqual(audit.VERSION, name)
 
 
 if __name__ == "__main__":
