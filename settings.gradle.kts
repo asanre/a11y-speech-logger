@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 rootProject.name = "a11y-speech-logger"
 
 include(":app")
+include(":sample")
