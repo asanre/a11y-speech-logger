@@ -585,6 +585,57 @@ class VersionCodeTest(unittest.TestCase):
         self.assertIsNone(audit.version_code("Unable to find package"))
 
 
+class TalkbackServiceTest(unittest.TestCase):
+    INSTALLED = (
+        "6 services found:\n"
+        "  Service #3:\n"
+        "    priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=false\n"
+        "    com.google.android.marvin.talkback/.TalkBackService\n"
+        "  Service #4:\n"
+        "    com.google.android.marvin.talkback/com.google.android.accessibility.selecttospeak.SelectToSpeakService\n"
+    )
+
+    def test_found_among_the_installed_services_while_it_is_off(self):
+        self.assertEqual(audit.talkback_service(self.INSTALLED), "com.google.android.marvin.talkback/.TalkBackService")
+
+    def test_found_with_a_vendor_package(self):
+        services = "    com.samsung.android.accessibility.talkback/com.samsung.android.marvin.talkback.TalkBackService\n"
+        self.assertEqual(
+            audit.talkback_service(services),
+            "com.samsung.android.accessibility.talkback/com.samsung.android.marvin.talkback.TalkBackService",
+        )
+
+    def test_none_when_no_service_is_talkback(self):
+        self.assertIsNone(audit.talkback_service("1 services found:\n    com.example/.OtherService\n"))
+
+
+class SetupProblemsTest(unittest.TestCase):
+    def test_none_when_the_engine_and_the_logger_stayed(self):
+        self.assertEqual(audit.setup_problems(audit.PACKAGE, f"{audit.FOCUS_LOGGER}\n"), [])
+
+    def test_the_logger_did_not_stay_enabled(self):
+        [problem] = audit.setup_problems(audit.PACKAGE, "null\n")
+        self.assertIn("A11y Focus Logger is not enabled", problem)
+
+    def test_another_engine_is_the_default(self):
+        [problem] = audit.setup_problems("com.google.android.tts", audit.FOCUS_LOGGER)
+        self.assertIn("default TTS engine is 'com.google.android.tts'", problem)
+
+
+class TalkbackKeysTest(unittest.TestCase):
+    def test_both_modifiers_are_tried_until_one_moves_focus(self):
+        self.assertEqual(audit.talkback_modifiers(None), (audit.LEFT_ALT, audit.LEFT_META))
+
+    def test_only_the_modifier_that_moved_focus_is_used_afterwards(self):
+        self.assertEqual(audit.talkback_modifiers(audit.LEFT_META), (audit.LEFT_META,))
+
+    def test_first_adds_ctrl_to_the_modifier(self):
+        press, key, release = audit.key_reports(audit.LEFT_META, "first")
+        self.assertEqual(press, [audit.LEFT_META | audit.LEFT_CTRL, 0, 0, 0, 0, 0, 0, 0])
+        self.assertEqual(key, [audit.LEFT_META | audit.LEFT_CTRL, 0, 0x50, 0, 0, 0, 0, 0])
+        self.assertEqual(release, [0] * 8)
+
+
 class VersionsTest(unittest.TestCase):
     ROOT = Path(__file__).parent.parent
 
