@@ -63,7 +63,7 @@ from .talkback import FOCUS_LOGGER, PACKAGE, TALKBACK_KEYS, with_logger, with_se
 from .walk import follow, open_session, output_dir, press_keys, start_session, stop_session
 
 # The APK this script talks to; bump it with versionCode in app/build.gradle.kts.
-APK_VERSION_CODE = 2
+APK_VERSION_CODE = 3
 RELEASES = "https://github.com/asanre/a11y-speech-logger/releases"
 
 

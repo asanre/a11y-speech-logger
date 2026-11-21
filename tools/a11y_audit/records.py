@@ -6,6 +6,8 @@ from pathlib import Path
 RECORD = re.compile(r"^\[(\w+)\] t=(\d+) ?(.*)$")
 TOKEN = re.compile(r'(\w+)=("(?:[^"\\]|\\.)*"|\S+)|(\S+)')
 BOUNDS = re.compile(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]")
+# A log entry holds about 4 KB, so the app splits a longer record: the rest follows in `[more]` entries.
+MORE = re.compile(r"^\[more\] t=\d+ (.*)$")
 
 
 def unquote(value):
@@ -56,9 +58,24 @@ def parse_record(line):
     return record
 
 
+def joined(lines):
+    """The log's lines with each record the app split over `[more]` entries put back together."""
+    result = []
+    for line in lines:
+        more = MORE.match(line)
+        if more and result:
+            result[-1] += more.group(1)
+        else:
+            result.append(line)
+    return result
+
+
+def parse_lines(text):
+    return [r for r in map(parse_record, joined(text.splitlines())) if r]
+
+
 def parse_session(path):
-    records = (parse_record(line) for line in Path(path).read_text(encoding="utf-8").splitlines())
-    return [r for r in records if r]
+    return parse_lines(Path(path).read_text(encoding="utf-8"))
 
 
 def label(node):

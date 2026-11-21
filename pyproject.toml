@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "a11y-speech-logger"
-version = "0.2.0"
+version = "0.3.0"
 description = "Capture what TalkBack says on an Android screen and check it against WCAG 2.2"
 readme = "README.md"
 license = { file = "LICENSE" }
