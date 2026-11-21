@@ -1,118 +1,121 @@
-# Device mode: drive the capture yourself
+# Device mode: capture the screen yourself
 
-You walk the screen with TalkBack from `adb`, as a TalkBack user would, then audit the folder you
+One command walks the screen with TalkBack, as a TalkBack user would. You then audit the folder it
 produced with the Capture mode. Captures go to `audits/` in the current folder: run the commands from
-the audited app's repo, or pass `--out`. How the walk works and why is in the README's
+the audited app's repo, or pass `--out`. How the walk works is in the README's
 [Driving TalkBack](https://github.com/asanre/a11y-speech-logger#driving-talkback).
 
-## 1. Check the device
+Use only `a11y-audit` and the `adb` commands written here. Don't read the tool's source and don't
+replace a step with `uiautomator` or other commands: when something fails, the error says what to run.
 
-- `adb devices` lists one device (pass `--serial` to `start` and `talkback` when there are several).
-- `adb shell settings get secure tts_default_synth` is `io.github.asanre.a11ylogger`, and
-  `adb shell settings get secure enabled_accessibility_services` contains `FocusLoggerService`.
-  If not, run `a11y-audit setup`. If it says the app is not installed or needs another version,
-  stop and give the user the install line it prints. If `a11y-audit` isn't found, send the user to
-  the README's [Install](https://github.com/asanre/a11y-speech-logger#install). `release` undoes the setup at the
-  end of every audit (step 5).
-- Note whether TalkBack is on (`talkback` in that list), to leave it as you found it.
+## 1. Reach the screen
 
-## 2. Reach the screen
-
-Ask the user which screen and state to audit, unless they said. If they say it is already open, check
-it with a `look` after `start`. If it is not open:
+Ask the user which screen and state to audit, unless they said. If it is not open:
 - with a deep link the user gives you: `adb shell am start -a android.intent.action.VIEW -d "<link>"`;
-- or with taps: `adb shell input tap <x> <y>` reaches the app as a plain tap, also with TalkBack on.
-  Take a screenshot first (`adb exec-out screencap -p > <scratch>.png`) to find the coordinates.
+- or with taps: `adb shell input tap <x> <y>`. Take a screenshot first
+  (`adb exec-out screencap -p > <scratch>.png`) to find the coordinates.
 
 Never sign in, type credentials or fill personal data: ask the user to do it.
 
-## 3. Walk it
+## 2. Walk it
 
 ```bash
-a11y-audit talkback on        # if it was off
-a11y-audit start <screen>     # --out <folder> to write elsewhere than audits/
-a11y-audit look               # check that the screen is the right one
-a11y-audit press first
-a11y-audit press next --times 40
+a11y-audit audit <screen> --app <the app's package>
 ```
 
-- `start` prints the capture folder: `<out>/<date>/<screen>/`. Before the session begins it puts
-  TalkBack's focus on the window's last node (often a tiny or invisible one), so a `FOCUSED` in the first
-  dump is the tool's doing, not the app's.
-- Each press prints `→ <class> "<label>" [bounds] actions="…" [issues]`, then what TalkBack said,
-  quoted. `(nothing spoken)` means TalkBack was silent on that element; `(focus didn't move)` means
-  the press changed nothing. `actions` are the labels of what the element does (a click label, custom
-  actions): read them before activating.
-- `walk ended: cycle` (back on the first element), `stopped` (focus stopped moving) or `left app`
-  (the system bars). `stopped` on the last element at the bottom of the screen is the normal end;
-  with elements left below it in a `look`, it is a trap. The next `press next` starts a new walk.
-- If the screen scrolls, TalkBack scrolls it as it moves. Take a `look` when the output doesn't match
-  what you expected.
+It sets the device up, turns TalkBack on, walks the screen from the first element, saves the capture,
+runs the rules and gives the device back. Read its output:
 
-## 4. Try what changes the state
+| You see | It means | Do |
+|---|---|---|
+| `error: …` and exit status 2 | The device isn't ready | Run the command the error names, then `audit` again. `a11y-audit doctor` lists everything that isn't ready |
+| `error: the window on top belongs to …` | A dialog or another app covers the screen | Close it (`adb shell input keyevent KEYCODE_BACK`) or open the app, then `audit` again |
+| `error: the logger's APK couldn't be downloaded` | No access to GitHub | Stop and give the user the line it prints |
+| `→ <class> "<name>" [bounds] actions="…" [issues]`, then quoted lines | An element TalkBack focused, and what TalkBack said | Nothing: this is the evidence |
+| `(nothing spoken)` | TalkBack was silent on that element | Nothing: the rules report it |
+| `walk ended: cycle` or `stopped` | The walk reached the end of the screen | Nothing |
+| `walk ended: left app` | Focus went to the keyboard or the system bars | Nothing, unless elements of the app were left out: compare with `screen-end.png` |
+| `saved <folder>` and `findings: …` | The capture is in `<folder>` | Go to step 3 or 4 |
 
-Go to each element whose state matters for the audit, `press activate`, read what happened, and walk
-the new state with `press next` until the walk ends. Typical ones: chips, tabs, filters, dropdowns,
-expandable sections, a field (it should open the keyboard), a dialog's buttons.
+Hints that name the keyboard's selection key ("Press select to activate") come from the virtual
+keyboard: never report them.
 
-- Get to an element with `press next` or `press prev`; never by tapping, which bypasses TalkBack.
-- After `activate`, check where focus went: on the result of the action, or lost to the top.
-- Close a dialog, menu or keyboard with `adb shell input keyevent KEYCODE_BACK`. Type into a field
-  with `adb shell input text "<text>"` (spaces as `%s`).
+## 3. Try what changes the state
+
+List the elements whose state matters: chips, tabs, filters, dropdowns, expandable sections, the
+options of a chat, a dialog's buttons. Then run `audit` again on the same screen, in its starting
+state, naming each one:
+
+```bash
+a11y-audit audit <screen>-states --app <package> --activate "<name>" --activate "<other name>"
+```
+
+After the walk it goes to each element by its name, activates it and says what focus did:
+
+| You see | It means |
+|---|---|
+| `(focus stayed on '<name>')` | Fine, if TalkBack also said the new state. Check the lines above it |
+| `!! focus moved on its own to …, N ms after the activation` | The app moved focus. It is a problem unless it landed on the result of the action |
+| `!! focus moved N times on its own` | A problem: the user is thrown around the screen |
+| `!! focus lost: … left the screen and nothing took TalkBack's focus` | A problem: the user is nowhere |
+| `(a new window opened)` | A dialog or another screen. Audit it in a run of its own if the user wants it |
+| `(nothing was activated: the element has no click action)` | The element can't be activated by TalkBack. Report it if it looks like a control |
+| `!! not reached, so not activated` | No element has that name. Check the name against the walk's output |
+
+An activation that changes the screen stays for the ones after it: when two elements exclude each
+other (two chat options), use one run for each.
+
 - **Ask the user before activating** anything that buys, pays, sends a message or a form, deletes,
   resets, signs out or changes the account or settings. Labels like "Buy", "Send", "Delete",
   "Reset", "Restart" or "Sign out", in any language, are a stop. So are elements that send without
   saying it (a suggestion chip in a chat sends its question; a mic may send what it hears) and
-  elements whose `actions` close or leave the screen (a sheet's drag handle that "closes the sheet").
+  elements whose `actions` close or leave the screen.
 - If you can't activate (the user said no, or your environment refused it), don't work around it with
   taps: list the element under *Not tested*.
-- Links inside a text (TalkBack: "links available") can't be opened with `press activate`, which
-  clicks the whole text. List them under *Not tested*, with the link names TalkBack read.
-- Stay on this screen. If an activation opens another screen, go back and note it; audit that screen
-  in a session of its own if the user wants it.
+- Links inside a text (TalkBack: "links available") can't be opened this way. List them under
+  *Not tested*, with the link names TalkBack read.
 
-Write down, as you go, what you tried and what happened: what the log can't show (you couldn't find
-an action, the keyboard didn't open). In the report it goes in the problem's **Evidence** as *observed
-while walking*, never as a tester note.
+What an activation did goes in the problem's **Evidence** as *observed while walking*, with the line
+the command printed.
 
-## 5. Close
+## 4. The keyboard pass, optional
 
-```bash
-a11y-audit stop
-a11y-audit talkback off      # if it was off before
-```
-
-`stop` prints the folder and the findings. If anything failed before `stop`, run `stop` anyway: it
-disconnects the keyboard.
-
-Optionally run the keyboard pass on the same screen, with TalkBack off:
-`a11y-audit keyboard <screen>-keyboard`.
-
-When you are done with the device, after the keyboard pass if you ran it, give it back:
-
-```bash
-a11y-audit release
-```
-
-It turns A11y Focus Logger off and restores the default text-to-speech engine. An accessibility
-service left on makes Compose apps keep tracking semantics changes, which skews performance
-measurements on the device. Run it even if something failed earlier.
+With the screen in its starting state: `a11y-audit setup`, `a11y-audit keyboard <screen>-keyboard`,
+`a11y-audit release`.
 
 Then follow the Capture mode on the folder (and the keyboard folder).
 
+## Step by step, when one command isn't enough
+
+For a state you can only reach by walking (a field to fill between two activations):
+
+```bash
+a11y-audit setup
+a11y-audit talkback on
+a11y-audit start <screen>          # prints the folder and the window on top
+a11y-audit goto "<name>"           # moves to that element; never count presses
+a11y-audit press activate          # prints what focus did
+a11y-audit press next --times 10
+a11y-audit look                    # a screenshot, when the output isn't what you expected
+a11y-audit stop                    # always, even after an error: it disconnects the keyboard
+a11y-audit talkback off            # if it was off before
+a11y-audit release                 # always: a service left on skews performance measurements
+```
+
+Close a dialog, menu or keyboard with `adb shell input keyevent KEYCODE_BACK`. Type into a field with
+`adb shell input text "<text>"` (spaces as `%s`). Get to an element with `goto`, `press next` or
+`press prev`; never by tapping, which bypasses TalkBack.
+
 ## What is different from a walk by hand
 
-- TalkBack's hints name the keyboard's selection key ("press the selection key to activate"), not a
-  double tap. That comes from the virtual keyboard: don't report it.
-- An `ORDER_JUMP` on the move from the last element back to the top, by the wrap or by a
-  `press first`, comes from the walk. Dismiss it.
+- An `ORDER_JUMP` on the move from the last element back to the top comes from the walk. Dismiss it.
 - `look-NN.png` are the screenshots you took to find your way; the rules don't use them, but you can
   cite them.
 - There is no `notes.md`.
 
 ## If it can't run
 
-- `start` says the device has no `hid` tool: ask the user to walk the screen by hand with
+- `audit` says the device has no `hid` tool: ask the user to walk the screen by hand with
   `a11y-audit capture <screen>` ([README, Quick start](https://github.com/asanre/a11y-speech-logger#quick-start),
   step 2), then continue with the Capture mode.
 - No device: use the Code mode.

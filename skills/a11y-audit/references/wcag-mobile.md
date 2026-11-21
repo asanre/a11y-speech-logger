@@ -41,7 +41,7 @@ screens of one app. 4.1.1 Parsing is obsolete in 2.2 and left out.
 | 2.3.1 Three Flashes | A | Nothing flashes more than three times a second | Not in the log | No |
 | 2.4.1 Bypass Blocks | A | Repeated blocks can be skipped: headings or panes to jump past them | `NO_HEADING`; the timeline length before the main content | Judgement |
 | 2.4.2 Page Titled | A | Each screen, dialog and sheet has a title TalkBack announces | `SCREEN_TITLE`, `titles` (same title on different screens is a failure too) | Yes |
-| 2.4.3 Focus Order | A | Focus moves in an order that keeps the meaning, and lands somewhere sensible after an action | `ORDER_JUMP`, `FOCUS_MOVED_AFTER_ACTION`, `NESTED_ACTIONABLE`, `ATF:TraversalOrderCheck`; keyboard sequence | Partly |
+| 2.4.3 Focus Order | A | Focus moves in an order that keeps the meaning, and lands somewhere sensible after an action | `ORDER_JUMP`, `FOCUS_MOVED_AFTER_ACTION`, `FOCUS_BOUNCED`, `FOCUS_LOST`, `NESTED_ACTIONABLE`, `ATF:TraversalOrderCheck`; keyboard sequence | Partly |
 | 2.4.4 Link Purpose (In Context) | A | A link's purpose is clear from its text or its context | `DUPLICATE_LABEL`, `ATF:LinkPurposeUnclearCheck`; "More", "Here" in the timeline | Partly |
 | 2.4.5 Multiple Ways | AA | More than one way to reach a screen | Applies across the app, not one screen | No |
 | 2.4.6 Headings and Labels | AA | Headings and labels describe their topic or purpose | `DUPLICATE_LABEL`, `ATF:DuplicateSpeakableTextCheck`; vague labels in the timeline | Partly |

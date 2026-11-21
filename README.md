@@ -53,8 +53,8 @@ For a whole organization, a claude.ai Owner can sync this repo in the organizati
 You need:
 - an Android device or emulator with TalkBack, Android 8 or later (Android 11 or later for contrast
   checks), connected with USB debugging on: `adb devices` must list it. For the walks driven from
-  `adb` (by the agent or `--auto`), its shell also needs the `hid` tool; `start` checks it. Tested on
-  Android 12 so far;
+  `adb` (by the agent, `audit` or `--auto`), its shell also needs the `hid` tool; `doctor` checks it.
+  Tested on Android 12 and on an API 37 emulator so far;
 - what [Install](#install) sets up, and `adb` on the `PATH`. To build the APK yourself, JDK 17 or later
   and the Android SDK (`ANDROID_HOME` or `sdk.dir` in `local.properties`);
 - an LLM agent that can run commands, with the skills installed: Claude Code, GitHub Copilot (CLI or
@@ -68,8 +68,9 @@ You need:
    TalkBack off and on again so it picks up the engine. The app's FAQ has the same steps by hand.
 
    From then on TalkBack is silent: what it says is printed in your terminal. [Setup](#setup) has the
-   details. If the installed APK doesn't match the command, `setup` stops and says which one to
-   install.
+   details. `setup` installs the APK of its own release when it is missing or another version
+   (`--apk <file>` when the device's computer can't reach GitHub). `a11y-audit doctor` lists what
+   isn't ready, each line with the command that fixes it.
 
    **Or let the agent do steps 2 to 4.** Open the screen on the device and ask, with the agent started
    in the app's repo:
@@ -96,9 +97,11 @@ You need:
 
    You get `audits/<date>/checkout/`, with the log, two screenshots and `findings.json`.
 
-   To skip the swiping, run `a11y-audit capture checkout --auto` instead: it walks every
-   element in TalkBack's order and stops when focus comes back to the first one. It activates
-   nothing, so states behind a tap still need the walk by hand.
+   To skip the swiping, run `a11y-audit audit checkout` instead: it sets the device up, turns
+   TalkBack on, walks every element in TalkBack's order, saves the capture and gives the device
+   back. Add `--activate "<name>"` for each element to tap after the walk: it says what happened to
+   focus. `a11y-audit capture checkout --now` captures the screen as it is, without a walk: the
+   tree, the ATF checks and the contrast, in two seconds, with or without TalkBack.
 3. **Walk it with a keyboard** (optional, same screen). Turn TalkBack off and leave the screen as it
    was, then run `a11y-audit keyboard checkout-keyboard`. You don't need a physical
    keyboard: TAB is sent over `adb`. It stops on its own.
@@ -184,6 +187,9 @@ Per screen, with `a11y-audit`:
 ```bash
 a11y-audit capture checkout   # dumps the tree, screenshots, shows the walk live, dumps again on Enter
 a11y-audit capture checkout --auto   # the same, walking with TalkBack on its own
+a11y-audit capture checkout --now    # the screen as it is: tree, ATF and contrast, no walk
+a11y-audit audit checkout --app com.example.shop --activate "Sort"   # set up, walk, activate, save, release
+a11y-audit doctor             # what isn't ready on the device, and the command that fixes it
 a11y-audit keyboard checkout  # walks the screen with TAB, TalkBack off
 a11y-audit rules audits/2026-10-01/checkout   # re-run the rules on an existing capture
 ```
@@ -215,7 +221,8 @@ a11y-audit talkback on              # keeps the other accessibility services
 a11y-audit start checkout           # connects the keyboard, dumps the tree, prints <out>/<date>/checkout
 a11y-audit press first              # TalkBack's first element in the window
 a11y-audit press next --times 30    # stops early with "walk ended: cycle|stopped|left app"
-a11y-audit press activate           # what a double tap does
+a11y-audit goto "Sort"              # moves to the element whose name contains the text
+a11y-audit press activate           # what a double tap does, then what focus did
 a11y-audit look                     # screenshot, prints its path
 a11y-audit stop                     # dumps again, disconnects, saves and runs the rules
 a11y-audit talkback off
@@ -239,6 +246,18 @@ What to know:
   element" works within the window that has focus, which can be the navigation bar.
 - After the last element, TalkBack goes back to the top of the window or stops moving; the walk ends
   there. An `ORDER_JUMP` on that last move comes from the walk, not from the app.
+- TalkBack's shortcuts use Alt on some builds and Search on others (Google's TalkBack 17). The first
+  key of a session tries both and keeps the one that moves focus.
+- Each key is logged as `[key]`, so the rules know which focus moves were the walk's. After
+  `press activate` the app is watched for at least 3 s and the tree is dumped again; then a line
+  says whether focus stayed, moved on its own (`!!`) or was lost, and whether the element left the
+  screen.
+- A walk that passes a text field ends on the on-screen keyboard's keys (`walk ended: left app`).
+  `goto` closes the keyboard before it starts from the top.
+- Google's TalkBack asks to send notifications each time it starts until someone answers.
+  `talkback on` closes that prompt with Back, unanswered, because it covers the app.
+- The session's records are copied from `adb logcat` to a file while it is open: the device's log is
+  not cleared, and a long session doesn't depend on what the device's buffer still holds.
 - `activate` clicks the whole element TalkBack is on, so links inside a text can't be opened this way.
 
 Or by hand:
@@ -286,6 +305,8 @@ One record per line: `[kind] t=<ms> <fields>`.
 | `[announce]` | `announceForAccessibility` | `pkg`, `text` |
 | `[input]` | input focus (keyboard) | `pkg` plus node fields |
 | `[click]` | activation | `pkg` plus node fields |
+| `[key]` | a walk driven from `adb` | `action` (`next`, `prev` or `first`): the key `a11y-audit` pressed |
+| `[more]` | any record over 1000 characters | the rest of the record before it, in as many entries as it takes |
 | `[tree]` | `DUMP` broadcast | `begin pkg=… window="…"` (the window title, empty if none), one indented node per line (`FOCUSED` marks accessibility focus, `INPUT_FOCUSED` input focus), `end nodes=N` |
 | `[atf]` | `DUMP` with `--ez atf true` | `check`, `type` (`ERROR` or `WARNING`), `id`, `class`, `bounds`, `msg`; then `end results=N`, with `skipped=contrast reason="…"` or `error="…"` when it applies. Without `skipped`, every check ran, contrast included |
 
@@ -326,11 +347,13 @@ All of them are evidence to verify, not verdicts. The `a11y-audit` skill confirm
 | `KEYBOARD_UNREACHABLE` | `keyboard` | 2.1.1 (2.1.2 if stuck) | failure | An actionable element that TAB never reaches, or that gets focus and loses it right away (focus reset) |
 | `NESTED_ACTIONABLE` | `audit.py` | 4.1.2, 2.4.3 | advisory | An actionable element inside another one, e.g. a favourite button inside a clickable card. Inside means deeper in the dump and within its bounds |
 | `LIST_SEMANTICS` | `audit.py` | 1.3.1 | advisory | A list whose declared item count doesn't match its items (not checked on lazy lists), a list of a single item, or clickable children without item info |
-| `FOCUS_MOVED_AFTER_ACTION` | `audit.py` | 2.4.3 | advisory | Within 1 s of an activation, focus jumped to another element; the detail says where |
+| `FOCUS_MOVED_AFTER_ACTION` | `audit.py` | 2.4.3 | advisory | After an activation focus went to another element with no key in between (within 1 s in a capture by hand, where keys aren't logged); the detail says where, how long after, and whether the activated element left the screen |
+| `FOCUS_BOUNCED` | `audit.py` | 2.4.3 | failure | After an activation focus moved two or more times on its own |
+| `FOCUS_LOST` | `audit.py` | 2.4.3 | failure | The activated element left the screen and nothing took TalkBack's focus |
 | `NO_HEADING` | `audit.py` | 1.3.1, 2.4.6 | advisory | No node on the screen is a heading. WCAG doesn't require headings; it requires visual headings to be marked |
 | `DUPLICATE_LABEL` | `audit.py` | 2.4.6, 2.4.4 | advisory | Several actionable elements share the same label |
 | `ROLE_BEFORE_LABEL` | `audit.py` | 4.1.2, 2.5.3 | advisory | The utterance starts with a role word ("Button, Stop"), one the session shows trailing elsewhere ("Menu, Button") |
-| `ORDER_JUMP` | `audit.py` | 1.3.2, 2.4.3 | advisory | Focus moved up more than 48dp; could also be a backwards swipe or a scroll |
+| `ORDER_JUMP` | `audit.py` | 1.3.2, 2.4.3 | advisory | Focus moved up more than 48dp; could also be a backwards swipe or a scroll. In a walk driven from `adb`, only after a forward key |
 | `REPEATED_ROLE` | `audit.py` | — | advisory | The role TalkBack appends ("…, Button", in any language) already appears in the label ("Add button, Button") |
 | `LONG_SPEECH` | `audit.py` | — | advisory | One utterance over 300 characters, which the user can only stop by interrupting TalkBack |
 
@@ -406,9 +429,9 @@ failed, and on older captures.
   are not important for accessibility, just as TalkBack does.
 - **Speech-to-focus matching is approximate.** Each focus owns what is spoken until the next one.
   Swiping very fast can shift utterances between neighbours.
-- **Tested** so far on one device, Android 12 with a vendor build of TalkBack (13.1), including the
-  ATF results, the keyboard pass and the walks driven from `adb`. Google's TalkBack relies on the same mechanism, the default TTS
-  engine, but hasn't been tested yet. Reports from other devices are welcome.
+- **Tested** so far on one device, Android 12 with a vendor build of TalkBack (13.1), and on an
+  emulator, API 37 with Google's TalkBack 17: the ATF results, the keyboard pass and the walks driven
+  from `adb`. From 0.3.0 the device hasn't been tried again. Reports from other devices are welcome.
 - **Not yet tested on a device**: `expanded` and `required`, which need Android 16. Rules over them
   are covered by `python3 -m unittest tools/test_audit.py`.
 
