@@ -182,13 +182,15 @@ HID_DESCRIPTOR = [
     0x95, 0x06, 0x75, 0x08, 0x15, 0x28, 0x25, 0x52, 0x05, 0x07, 0x19, 0x28, 0x29, 0x52, 0x81, 0x00,
     0xC0,
 ]
-LEFT_CTRL, LEFT_ALT = 0x01, 0x04
-# TalkBack's keyboard shortcuts, as (modifiers, key usage). Its shortcut to activate needs a keyboard
-# with letters, so `activate` asks the focus logger to click instead.
+LEFT_CTRL, LEFT_ALT, LEFT_META = 0x01, 0x04, 0x08
+# TalkBack's modifier key: Alt on TalkBack 13 (a vendor build), Search on Google's TalkBack 17.
+TALKBACK_MODIFIERS = (LEFT_ALT, LEFT_META)
+# TalkBack's keyboard shortcuts, as (keys held with the modifier, key usage). Its shortcut to activate
+# needs a keyboard with letters, so `activate` asks the focus logger to click instead.
 TALKBACK_KEYS = {
-    "next": (LEFT_ALT, 0x4F),              # Alt+Right
-    "prev": (LEFT_ALT, 0x50),              # Alt+Left
-    "first": (LEFT_ALT | LEFT_CTRL, 0x50),  # Alt+Ctrl+Left, within the window that has focus
+    "next": (0, 0x4F),           # modifier+Right
+    "prev": (0, 0x50),           # modifier+Left
+    "first": (LEFT_CTRL, 0x50),  # modifier+Ctrl+Left, within the window that has focus
 }
 # Long enough for TalkBack to speak, and for a stop with no speech to count as SILENT_FOCUS.
 TALKBACK_STEP_S = 1.5
@@ -858,6 +860,34 @@ def talkback_walk_ending(focuses, app_pkg, idle_steps=0):
     return None
 
 
+def talkback_modifiers(confirmed):
+    """The modifiers to press a shortcut with: the one that already moved focus in this session, or
+    each known one in turn until one does."""
+    return (confirmed,) if confirmed else TALKBACK_MODIFIERS
+
+
+def key_reports(modifier, action):
+    """The keyboard reports for a TalkBack shortcut: modifiers down, the key, everything up."""
+    held, key = TALKBACK_KEYS[action]
+    return [[modifier | held, 0, pressed] + [0] * 5 for pressed in (0, key)] + [[0] * 8]
+
+
+def talkback_service(services):
+    """TalkBack's component among the accessibility services, whatever package ships it."""
+    found = re.search(r"[\w.]+/[\w.]*TalkBackService", services)
+    return found.group() if found else None
+
+
+def setup_problems(engine, services):
+    """What the logger's setup is missing, from the device's TTS engine and enabled services."""
+    problems = []
+    if engine.strip() != PACKAGE:
+        problems.append(f"the default TTS engine is {engine.strip()!r}, so [speech] won't be captured")
+    if FOCUS_LOGGER not in services and f"{PACKAGE}/{PACKAGE}.FocusLoggerService" not in services:
+        problems.append("A11y Focus Logger is not enabled, so [focus] and [tree] won't be captured")
+    return problems
+
+
 def with_service(services, component, enabled):
     """The `enabled_accessibility_services` value with `component` added or removed, others kept."""
     kept = [s for s in services.strip().split(":") if s not in ("", "null", component)]
@@ -999,13 +1029,15 @@ def records_of(serial):
     return [r for r in map(parse_record, log.splitlines()) if r]
 
 
-def warn_if_not_ready(serial):
-    engine = adb(serial, "shell", "settings", "get", "secure", "tts_default_synth").strip()
+def device_setup_problems(serial):
+    engine = adb(serial, "shell", "settings", "get", "secure", "tts_default_synth")
     services = adb(serial, "shell", "settings", "get", "secure", "enabled_accessibility_services")
-    if engine != PACKAGE:
-        print(f"warning: the default TTS engine is {engine!r}, so [speech] won't be captured", file=sys.stderr)
-    if FOCUS_LOGGER not in services and f"{PACKAGE}/{PACKAGE}.FocusLoggerService" not in services:
-        print("warning: A11y Focus Logger is not enabled, so [focus] and [tree] won't be captured", file=sys.stderr)
+    return setup_problems(engine, services)
+
+
+def warn_if_not_ready(serial):
+    for problem in device_setup_problems(serial):
+        print(f"warning: {problem}", file=sys.stderr)
 
 
 def output_dir(base, screen):
@@ -1071,10 +1103,13 @@ def read_session(serial, dumps, atf=False):
 
 
 def talkback_component(serial):
-    found = re.search(r"[\w.]+/[\w.]*TalkBackService", adb(serial, "shell", "dumpsys", "accessibility"))
-    if not found:
+    # `dumpsys accessibility` only lists the services that are on, so it can't find TalkBack to turn it on.
+    installed = adb(serial, "shell", "cmd", "package", "query-services", "--brief",
+                    "-a", "android.accessibilityservice.AccessibilityService")
+    component = talkback_service(installed) or talkback_service(adb(serial, "shell", "dumpsys", "accessibility"))
+    if not component:
         sys.exit("error: TalkBack is not installed")
-    return found.group()
+    return component
 
 
 def put_services(serial, value):
@@ -1114,6 +1149,8 @@ def setup(args):
         time.sleep(2)
     put_services(args.serial, value)
     time.sleep(2)  # the services take a moment to start
+    if problems := device_setup_problems(args.serial):
+        sys.exit("error: the setup didn't stay: " + "; ".join(problems) + ". Run `a11y-audit setup` again")
     print(f"Logger set up: default TTS engine and A11y Focus Logger. Services: {value}")
 
 
@@ -1185,16 +1222,21 @@ def press_keys(folder, meta, action, times):
     for _ in range(times):
         before = records_of(meta["serial"])
         last_t = before[-1]["t"] if before else -1
-        if action == "activate":
-            adb(meta["serial"], "shell", "am", "broadcast", "-a", ACTIVATE_ACTION)
-        else:
-            modifiers, key = TALKBACK_KEYS[action]
-            with (folder / ".keys").open("a") as keys:
-                for report in ([modifiers, 0, 0], [modifiers, 0, key], [0, 0, 0]):
-                    keys.write(json.dumps({"id": 1, "command": "report", "report": report + [0] * 5}) + "\n")
         if action in ("first", "activate"):
             new_walk(folder, meta, last_t)
-        time.sleep(TALKBACK_STEP_S)
+        if action == "activate":
+            adb(meta["serial"], "shell", "am", "broadcast", "-a", ACTIVATE_ACTION)
+            time.sleep(TALKBACK_STEP_S)
+        for modifier in () if action == "activate" else talkback_modifiers(meta.get("modifier")):
+            with (folder / ".keys").open("a") as keys:
+                for report in key_reports(modifier, action):
+                    keys.write(json.dumps({"id": 1, "command": "report", "report": report}) + "\n")
+            time.sleep(TALKBACK_STEP_S)
+            if any(r["kind"] == "focus" and r["t"] > last_t for r in records_of(meta["serial"])):
+                if meta.get("modifier") != modifier:
+                    meta["modifier"] = modifier
+                    (folder / ".session.json").write_text(json.dumps(meta))
+                break
         records = records_of(meta["serial"])
         new = [r for r in records if r["t"] > last_t]
         for record in new:
