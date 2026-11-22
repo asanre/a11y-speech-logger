@@ -891,6 +891,182 @@ class GotoTest(unittest.TestCase):
         self.assertFalse(audit.has_label(focus, ""))
 
 
+SEND = 'id=- class=View clickable bounds=[400,900][496,996] size=48x48dp issues=NO_LABEL'
+ORDERS = 'id=- class=TextView text="My orders" clickable bounds=[0,300][400,396] size=200x48dp'
+OFFERS = 'id=- class=TextView text="Offers" clickable bounds=[0,400][400,496] size=200x48dp'
+
+
+class CriteriaTest(unittest.TestCase):
+    def test_the_draft_covers_the_criteria_of_the_skill_reference(self):
+        reference = (Path(__file__).parent.parent / "skills" / "a11y-audit" / "references" / "wcag-mobile.md").read_text()
+        in_reference = re.findall(r"^\| (\d\.\d+\.\d+(?:–\d\.\d+\.\d+)?) ", reference, re.M)
+        self.assertEqual([c["sc"] for c in audit.CRITERIA], in_reference)
+
+    def test_names_match_the_ones_the_rules_use(self):
+        names = {c["sc"]: (c["name"], c["level"]) for c in audit.CRITERIA}
+        for sc, expected in audit.WCAG.items():
+            self.assertEqual(names[sc], expected)
+
+    def criterion(self, sc):
+        return next(c for c in audit.CRITERIA if c["sc"] == sc)
+
+    def test_a_failure_finding_fails_the_criterion(self):
+        findings = [{"rule": "NO_LABEL", "conformance": "failure"}, {"rule": "NO_ROLE", "conformance": "advisory"}]
+        self.assertEqual(audit.criterion_result(self.criterion("4.1.2"), findings, False), ("Fail", "NO_LABEL, NO_ROLE"))
+
+    def test_only_advisory_findings_are_an_advisory(self):
+        findings = [{"rule": "NO_HEADING", "conformance": "advisory"}]
+        self.assertEqual(audit.criterion_result(self.criterion("1.3.1"), findings, False), ("Advisory", "NO_HEADING"))
+
+    def test_what_a_capture_cannot_show_is_not_tested(self):
+        result, reason = audit.criterion_result(self.criterion("1.3.4"), [], False)
+        self.assertEqual(result, "Not tested")
+        self.assertIn("orientation", reason)
+
+    def test_keyboard_criteria_need_the_keyboard_pass(self):
+        result, reason = audit.criterion_result(self.criterion("2.1.1"), [], False)
+        self.assertEqual(result, "Not tested")
+        self.assertIn("a11y-audit keyboard", reason)
+
+    def test_no_finding_is_never_a_pass_on_its_own(self):
+        result, reason = audit.criterion_result(self.criterion("2.5.8"), [], False)
+        self.assertEqual(result, "?")
+        self.assertIn("SMALL_TARGET", reason)
+
+
+class ReportDraftTest(unittest.TestCase):
+    def draft(self):
+        result = run(
+            *dump(1, SEND, ORDERS, OFFERS),
+            f"[focus] t=10 pkg={PKG} {ORDERS}",
+            '[speech] t=11 "My orders"',
+            f"[focus] t=20 pkg={PKG} {SEND}",
+            '[speech] t=21 "Unlabelled"',
+            f"[atf] t=30 check=SpeakableTextPresentCheck type=ERROR id=- class=View bounds=[400,900][496,996] msg=\"No label\"",
+            "[atf] t=31 end results=1",
+        )
+        return audit.report_draft(result, "checkout")
+
+    def test_the_conformance_table_is_filled_from_the_findings(self):
+        self.assertIn("| 4.1.2 Name, Role, Value | A | **Fail** | `NO_LABEL`, `NO_ROLE` |", self.draft())
+
+    def test_nothing_is_marked_pass(self):
+        self.assertNotIn("**Pass**", self.draft())
+
+    def test_instances_of_a_rule_are_one_problem(self):
+        text = self.draft()
+        self.assertEqual(text.count("### NO_ROLE"), 1)
+        self.assertIn("3 elements", text)
+        self.assertIn("'My orders'", text)
+        self.assertIn("'Offers'", text)
+
+    def test_what_talkback_said_is_quoted_next_to_the_element(self):
+        self.assertIn('TalkBack said: "My orders"', self.draft())
+
+    def test_a_finding_atf_repeats_is_listed_once(self):
+        text = self.draft()
+        self.assertNotIn("### ATF:SpeakableTextPresentCheck", text)
+        self.assertIn("also `ATF:SpeakableTextPresentCheck`", text)
+
+    def test_each_problem_says_how_to_check_it(self):
+        self.assertIn("Check:", self.draft())
+
+    def activated(self, *after):
+        return run(
+            *dump(1, OPTION, FIELD),
+            "[key] t=400 action=next",
+            f"[focus] t=450 pkg={PKG} {OPTION}",
+            f"[click] t=500 pkg={PKG} {OPTION}",
+            *after,
+            *dump(3000, OPTION, FIELD, REPLY),
+        )
+
+    def test_an_activation_is_listed_with_what_talkback_said_after_it(self):
+        text = audit.report_draft(self.activated('[speech] t=600 "Selected"'), "chat")
+        self.assertIn("- 'Shipping' · focus stayed · TalkBack said: \"Selected\"", text)
+
+    def test_an_activation_talkback_said_nothing_about(self):
+        text = audit.report_draft(self.activated(), "chat")
+        self.assertIn("- 'Shipping' · focus stayed · TalkBack said nothing", text)
+
+    def test_text_that_appeared_unsaid_points_at_status_messages(self):
+        text = audit.report_draft(self.activated(), "chat")
+        self.assertIn("| 4.1.3 Status Messages | AA | ? | 1 text appeared and TalkBack didn't say it, listed below", text)
+
+    def test_rules_writes_the_draft_next_to_the_findings(self):
+        with tempfile.TemporaryDirectory() as folder:
+            lines = dump(1, SEND, ORDERS) + [f"[focus] t=10 pkg={PKG} {ORDERS}", '[speech] t=11 "My orders"']
+            (Path(folder) / "session.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+            audit.rules(argparse.Namespace(dir=folder))
+            self.assertIn("### NO_ROLE", (Path(folder) / "report-draft.md").read_text(encoding="utf-8"))
+
+
+def composable(name, line, bounds, semantics=None, children=()):
+    left, top, right, bottom = bounds
+    node = {
+        "name": name,
+        "bounds": {"left": left, "top": top, "right": right, "bottom": bottom},
+        "sourceLocation": {"fileName": "Shop.kt", "lineNumber": line},
+        "children": list(children),
+    }
+    return {**node, "semantics": semantics} if semantics else node
+
+
+class PreviewTreeTest(unittest.TestCase):
+    """The component tree `android preview render --component-tree` writes, read by the same rules."""
+
+    def result(self, *children):
+        tree = {"previewId": "ShopPreview", "densityDpi": 320, "components": [composable("Column", 10, (0, 0, 800, 1600), None, children)]}
+        return run(*audit.preview_lines(tree))
+
+    def test_a_clickable_text_without_a_role_points_at_its_line(self):
+        result = self.result(composable("Text", 59, (0, 100, 400, 196), {"text": "My orders", "actions": "OnClick"}))
+        [f] = rules(result, "NO_ROLE")
+        self.assertEqual(f["node"]["text"], "My orders")
+        self.assertEqual(f["node"]["src"], "Shop.kt:59")
+        self.assertEqual(f["node"]["size"], "200x48dp")
+
+    def test_a_role_is_the_class_talkback_would_read(self):
+        result = self.result(composable("Text", 60, (0, 100, 400, 196), {"text": "Buy", "role": "Button", "actions": "OnClick"}))
+        self.assertEqual(rules(result, "NO_ROLE"), [])
+        self.assertEqual(result["tree"][0]["class"], "Button")
+
+    def test_a_clickable_box_with_nothing_to_say_has_no_label(self):
+        result = self.result(composable("Box", 70, (0, 100, 96, 196), {"actions": "OnClick"}))
+        [f] = rules(result, "NO_LABEL")
+        self.assertEqual(f["node"]["src"], "Shop.kt:70")
+
+    def test_text_inside_a_clickable_names_it(self):
+        inner = composable("Text", 72, (10, 110, 86, 186), {"text": "Add"})
+        result = self.result(composable("Box", 71, (0, 100, 96, 196), {"role": "Button", "actions": "OnClick"}, [inner]))
+        self.assertEqual(rules(result, "NO_LABEL"), [])
+
+    def test_a_heading_and_a_selected_item_keep_their_state(self):
+        result = self.result(
+            composable("Text", 20, (0, 0, 400, 96), {"text": "Shop", "heading": "true"}),
+            composable("Text", 21, (0, 100, 400, 196), {"text": "All", "role": "Tab", "selected": "true", "actions": "OnClick"}),
+        )
+        self.assertEqual(rules(result, "NO_HEADING"), [])
+        self.assertIn("selected", result["tree"][1]["flags"])
+
+    def test_a_text_field_is_an_edit_text(self):
+        result = self.result(composable("Box", 721, (0, 100, 400, 196), {"actions": "OnClick, OnLongClick, SetText"}))
+        self.assertEqual(result["tree"][0]["class"], "EditText")
+
+    def test_the_draft_says_it_comes_from_a_preview(self):
+        result = self.result(composable("Text", 59, (0, 100, 400, 196), {"text": "My orders", "actions": "OnClick"}))
+        text = audit.report_draft(result, "ShopPreview")
+        self.assertIn("from code, not verified on device", text)
+        self.assertIn("'My orders' · Shop.kt:59", text)
+
+
+    def test_what_needs_a_walk_is_not_tested_from_a_preview(self):
+        result = self.result(composable("Text", 59, (0, 100, 400, 196), {"text": "My orders", "actions": "OnClick"}))
+        text = audit.report_draft(result, "ShopPreview")
+        self.assertIn("| 2.4.3 Focus Order | A | **Not tested** | a capture on a device: `a11y-audit audit <screen>` |", text)
+        self.assertIn("| 4.1.2 Name, Role, Value | A | **Fail** | `NO_ROLE` |", text)
+
+
 class VersionsTest(unittest.TestCase):
     ROOT = Path(__file__).parent.parent
 
