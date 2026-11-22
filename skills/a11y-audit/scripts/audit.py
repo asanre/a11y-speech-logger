@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The `a11y-audit` command from a clone: `python3 tools/audit.py`. The code is in `a11y_audit/`."""
+"""The `a11y-audit` command as it ships with the skill: `python3 audit.py <args>`. The code is in `a11y_audit/`."""
 
 from a11y_audit.records import *  # noqa: F401,F403
 from a11y_audit.contrast import *  # noqa: F401,F403

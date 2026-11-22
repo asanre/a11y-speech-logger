@@ -9,7 +9,7 @@ import unittest
 import zlib
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent / "skills" / "a11y-audit" / "scripts"))
 import audit  # noqa: E402
 
 PKG = "com.example.app"

@@ -17,5 +17,5 @@ Homepage = "https://github.com/asanre/a11y-speech-logger"
 a11y-audit = "a11y_audit.cli:main"
 
 [tool.setuptools]
-package-dir = { "" = "tools" }
+package-dir = { "" = "skills/a11y-audit/scripts" }
 packages = ["a11y_audit"]
