@@ -38,8 +38,11 @@ def adb_problem(stderr):
         return "the device hasn't authorized this computer; accept the USB debugging prompt on its screen"
     if "offline" in stderr:
         return "the device is offline; reconnect it, then check `adb devices`"
+    if "INSTALL_FAILED_UPDATE_INCOMPATIBLE" in stderr:
+        return (f"the A11y Speech Logger on the device was signed with another key (release 0.2.0 was); uninstall it "
+                f"with `adb uninstall {PACKAGE}`, then run `a11y-audit setup` again")
     lines = stderr.strip().splitlines()
-    return f"adb failed: {lines[0] if lines else 'no output'}"
+    return f"adb failed: {lines[-1] if lines else 'no output'}"
 
 
 def adb_cmd(serial, *args):
@@ -52,7 +55,7 @@ def adb(serial, *args, binary=False):
     except FileNotFoundError:
         raise NotReady("adb is not on the PATH; install Android's platform-tools") from None
     if result.returncode:
-        raise NotReady(adb_problem((result.stderr or result.stdout).decode("utf-8", "replace")))
+        raise NotReady(adb_problem((result.stdout + result.stderr).decode("utf-8", "replace")))
     return result.stdout if binary else result.stdout.decode("utf-8", "replace")
 
 
