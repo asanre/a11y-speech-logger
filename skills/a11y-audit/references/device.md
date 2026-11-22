@@ -1,7 +1,7 @@
 # Device mode: capture the screen yourself
 
-One command walks the screen with TalkBack, as a TalkBack user would. You then audit the folder it
-produced with the Capture mode. Captures go to `audits/` in the current folder: run the commands from
+One command walks the screen with TalkBack, as a TalkBack user would. You then turn the folder it
+produced into the report with [capture.md](capture.md). Captures go to `audits/` in the current folder: run the commands from
 the audited app's repo, or pass `--out`. How the walk works is in the README's
 [Driving TalkBack](https://github.com/asanre/a11y-speech-logger#driving-talkback).
 
@@ -14,6 +14,9 @@ Ask the user which screen and state to audit, unless they said. If it is not ope
 - with a deep link the user gives you: `adb shell am start -a android.intent.action.VIEW -d "<link>"`;
 - or with taps: `adb shell input tap <x> <y>`. Take a screenshot first
   (`adb exec-out screencap -p > <scratch>.png`) to find the coordinates.
+
+Start each run from a known state: an app left open keeps what the last run did (an option already
+chosen, a banner closed). Close it with `adb shell am force-stop <package>` and open the screen again.
 
 Never sign in, type credentials or fill personal data: ask the user to do it.
 
@@ -83,7 +86,7 @@ the command printed.
 With the screen in its starting state: `a11y-audit setup`, `a11y-audit keyboard <screen>-keyboard`,
 `a11y-audit release`.
 
-Then follow the Capture mode on the folder (and the keyboard folder).
+Then follow [capture.md](capture.md) on the folder. Run the keyboard pass before it, so the draft has it.
 
 ## Step by step, when one command isn't enough
 
@@ -117,5 +120,5 @@ Close a dialog, menu or keyboard with `adb shell input keyevent KEYCODE_BACK`. T
 
 - `audit` says the device has no `hid` tool: ask the user to walk the screen by hand with
   `a11y-audit capture <screen>` ([README, Quick start](https://github.com/asanre/a11y-speech-logger#quick-start),
-  step 2), then continue with the Capture mode.
-- No device: use the Code mode.
+  step 2), then continue with [capture.md](capture.md).
+- No device: use [code.md](code.md).
