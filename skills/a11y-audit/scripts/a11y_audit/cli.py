@@ -104,6 +104,8 @@ from .walk import discard_session, follow, goto, open_session, output_dir, press
 VERSION = "0.3.0"
 APK_VERSION_CODE = 3
 RELEASES = "https://github.com/asanre/a11y-speech-logger/releases"
+# How many times `setup` writes the accessibility setting before it gives up.
+SETUP_ATTEMPTS = 3
 # How long TalkBack's permission prompt is waited for after TalkBack turns on.
 PERMISSION_PROMPT_S = 2
 
@@ -179,8 +181,12 @@ def setup(args):
     if "talkback" in services.casefold():  # TalkBack picks up the new engine only when it starts
         put_services(args.serial, with_service(value, required_talkback(args.serial), False))
         wait_until(lambda: talkback_running(args.serial), lambda running: not running, SERVICE_TIMEOUT_S, poll=0.3)
-    put_services(args.serial, value)
-    problems, _ = wait_until(lambda: device_setup_problems(args.serial), lambda found: not found, SERVICE_TIMEOUT_S, poll=0.3)
+    # Right after the APK is installed the system can drop the setting once: it is written again.
+    for _ in range(SETUP_ATTEMPTS):
+        put_services(args.serial, value)
+        problems, _ = wait_until(lambda: device_setup_problems(args.serial), lambda found: not found, SERVICE_TIMEOUT_S, poll=0.3)
+        if not problems:
+            break
     if problems:
         raise NotReady("the setup didn't stay: " + "; ".join(problems) + ". Run `a11y-audit setup` again")
     print(f"Logger set up: default TTS engine and A11y Focus Logger. Services: {value}")
