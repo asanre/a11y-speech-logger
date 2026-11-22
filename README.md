@@ -9,16 +9,9 @@ that uses the system's default engine.
 
 ## Install
 
-1. **The command**, `a11y-audit` (Python 3.9 or later, standard library only):
-   ```bash
-   uv tool install git+https://github.com/asanre/a11y-speech-logger
-   ```
-   `pipx install` takes the same URL. From a clone, `python3 tools/audit.py` is the same command.
-2. **The APK**, from the [release](https://github.com/asanre/a11y-speech-logger/releases) that matches
-   the command (`a11y-audit setup` checks it): `adb install -r a11y-speech-logger-<version>.apk`. If
-   it fails because the signature doesn't match, `adb uninstall io.github.asanre.a11ylogger` first.
-   From a clone, `./gradlew :app:installDebug`.
-3. **The skills**, in `skills/`, for your agent:
+1. **The skills**, for your agent. The `a11y-audit` command comes inside them (in the `a11y-audit`
+   skill, `scripts/audit.py`: Python 3.9 or later, standard library only), and the agent runs it from
+   there, so the command and the skills are always the same version:
    - Claude Code: `claude plugin marketplace add asanre/a11y-speech-logger`, then
      `claude plugin install a11y-speech-logger@a11y-speech-logger`. Skills are namespaced:
      `/a11y-speech-logger:a11y-audit`.
@@ -26,10 +19,24 @@ that uses the system's default engine.
      `copilot plugin install a11y-speech-logger@a11y-speech-logger`.
    - VS Code: add `"chat.plugins.marketplaces": ["asanre/a11y-speech-logger"]` (experimental) and
      install it from the Extensions view (`@agentPlugins`).
-   - OpenCode: clone the repo and link each folder of `skills/` into `~/.config/opencode/skills/`.
-   - Any other agent that reads [Agent Skills](https://agentskills.io): link them into
-     `~/.agents/skills/`, which OpenCode, Copilot and VS Code also read, so don't combine it with the
-     plugin in those, or the skills load twice.
+   - Any agent that reads [Agent Skills](https://agentskills.io):
+     `npx skills add asanre/a11y-speech-logger`, or clone the repo and link each folder of `skills/`
+     into `~/.agents/skills/` (OpenCode: `~/.config/opencode/skills/`). OpenCode, Copilot and VS Code
+     also read `~/.agents/skills/`, so don't combine it with the plugin in those, or the skills load
+     twice.
+2. **The APK**: nothing to do. `a11y-audit setup` (and `a11y-audit audit`) installs the one of its own
+   release on the device. Where the computer can't reach GitHub, download it from the
+   [release](https://github.com/asanre/a11y-speech-logger/releases) once and pass it:
+   `a11y-audit setup --apk a11y-speech-logger-<version>.apk`. If the install fails because the
+   signature doesn't match, `adb uninstall io.github.asanre.a11ylogger` first. From a clone,
+   `./gradlew :app:installDebug`.
+3. **The command in your own terminal**, only if you want to capture by hand:
+   ```bash
+   uv tool install git+https://github.com/asanre/a11y-speech-logger
+   ```
+   `pipx install` takes the same URL. From a clone, `python3 skills/a11y-audit/scripts/audit.py` is
+   the same command. Upgrade it when you update the skills: `a11y-audit doctor` says when the APK on
+   the device belongs to another version.
 
    The examples below use the skills' short names, such as `/a11y-audit`. If your agent doesn't take
    it, use the plugin's prefix: `/a11y-speech-logger:a11y-audit`.
@@ -47,6 +54,18 @@ add `audits/` to the app's `.gitignore`, since captures hold screenshots of the 
 ```
 
 For a whole organization, a claude.ai Owner can sync this repo in the organization's plugin catalog.
+
+## Which capture to use
+
+From the cheapest to the most complete. Each one writes `findings.json` and `report-draft.md`.
+
+| You have | Run | It shows |
+|---|---|---|
+| No device, a `@Preview` of the screen | `android preview render <module> --component-tree --output <folder> --fqn <preview>`, then `a11y-audit preview <folder>` | Names, roles, states, headings and contrast, each with file and line. Nothing about speech, focus or touch targets |
+| A device, two seconds | `a11y-audit capture <screen> --now` | The tree, the ATF checks, contrast and target sizes of the screen as it is |
+| A device, a minute | `a11y-audit audit <screen> --app <package> --activate "<name>"` | What TalkBack says on each element, the order, and what focus does after each activation |
+| A person with the device | `a11y-audit capture <screen>` | The states an automatic walk can't reach: gestures, links inside a text, a flow |
+| Keyboard users to check | `a11y-audit keyboard <screen>-keyboard` | What TAB reaches and whether focus can be seen |
 
 ## Quick start
 
@@ -150,7 +169,7 @@ One APK, two components, both logging to the `A11ySpeech` tag:
 
 On top of the APK:
 
-- **`a11y-audit`** (`tools/audit.py`): captures a session per screen (walked by you, on its own, or
+- **`a11y-audit`** (`skills/a11y-audit/scripts/`): captures a session per screen (walked by you, on its own, or
   by an agent step by step), walks it with a keyboard, and runs rules tagged with their WCAG 2.2
   criteria.
 - Agent skills in `skills/`, also published as a plugin for Claude Code, Copilot CLI and VS Code:
@@ -439,9 +458,13 @@ failed, and on older captures.
   are not important for accessibility, just as TalkBack does.
 - **Speech-to-focus matching is approximate.** Each focus owns what is spoken until the next one.
   Swiping very fast can shift utterances between neighbours.
-- **Tested** so far on one device, Android 12 with a vendor build of TalkBack (13.1), and on an
-  emulator, API 37 with Google's TalkBack 17: the ATF results, the keyboard pass and the walks driven
-  from `adb`. From 0.3.0 the device hasn't been tried again. Reports from other devices are welcome.
+- **Tested** on these two. Reports from other devices are welcome.
+
+  | Device | Android | TalkBack | Tried with |
+  |---|---|---|---|
+  | A phone | 12 | 13.1, a vendor build (Alt shortcuts) | 0.2.0: captures by hand, the keyboard pass, the ATF results and the walks driven from `adb`. Not tried again with 0.3.0 |
+  | An emulator, `Medium_Phone` | API 37 | 17.0, Google's (Search shortcuts) | 0.3.0: `audit`, `goto`, activations, `capture --now`, the keyboard pass and the ATF results |
+
 - **Not yet tested on a device**: `expanded` and `required`, which need Android 16. Rules over them
   are covered by `python3 -m unittest tools/test_audit.py`.
 
@@ -450,8 +473,9 @@ failed, and on older captures.
 The APK, the command and the skills ship together, and the command and the skills install from
 `main`, so a version bump on `main` and its release go out in one step:
 
-1. Bump `versionCode` and `versionName` in `app/build.gradle.kts`, `APK_VERSION_CODE` in
-   `tools/audit.py`, and `version` in `pyproject.toml` and `.claude-plugin/plugin.json`.
+1. Bump `versionCode` and `versionName` in `app/build.gradle.kts`, `VERSION` and `APK_VERSION_CODE`
+   in `skills/a11y-audit/scripts/a11y_audit/cli.py`, and `version` in `pyproject.toml` and
+   `.claude-plugin/plugin.json`.
    `python3 -m unittest tools/test_audit.py` fails if they disagree.
 2. Commit, then build, push `main` with the tag, and publish the APK:
    ```bash
@@ -466,6 +490,9 @@ The APK, the command and the skills ship together, and the command and the skill
    ```bash
    gh release create v<version> a11y-speech-logger-<version>.apk
    ```
+
+A plugin keeps its users on the `version` of `plugin.json` until that string changes, so a change to the
+skills or the command only reaches them with a version bump.
 
 The APK is signed with the debug key of the machine that builds it; build every release on the same
 one, or installs over the previous release fail.
