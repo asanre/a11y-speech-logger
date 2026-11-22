@@ -7,6 +7,8 @@ FOCUS_LOGGER = f"{PACKAGE}/.FocusLoggerService"
 LEFT_CTRL, LEFT_ALT, LEFT_META = 0x01, 0x04, 0x08
 # TalkBack's modifier key: Alt on TalkBack 13 (a vendor build), Search on Google's TalkBack 17.
 TALKBACK_MODIFIERS = (LEFT_ALT, LEFT_META)
+# Seen with Alt on TalkBack 13 and with Search on 17; the versions in between weren't tried.
+SEARCH_FROM_TALKBACK = 15
 # TalkBack's keyboard shortcuts, as (keys held with the modifier, key usage). Its shortcut to activate
 # needs a keyboard with letters, so `activate` asks the focus logger to click instead.
 TALKBACK_KEYS = {
@@ -16,10 +18,26 @@ TALKBACK_KEYS = {
 }
 
 
-def talkback_modifiers(confirmed):
-    """The modifiers to press a shortcut with: the one that already moved focus in this session, or
-    each known one in turn until one does."""
-    return (confirmed,) if confirmed else TALKBACK_MODIFIERS
+def talkback_modifiers(confirmed, version=None):
+    """The modifiers to press a shortcut with: the one TalkBack already took in this session, or each
+    known one in turn, starting with Search from TalkBack 15. The order matters: a key TalkBack doesn't
+    take reaches the app as an arrow key."""
+    if confirmed:
+        return (confirmed,)
+    return TALKBACK_MODIFIERS[::-1] if version and version >= SEARCH_FROM_TALKBACK else TALKBACK_MODIFIERS
+
+
+def talkback_major(dumpsys):
+    """TalkBack's major version, from `dumpsys package`."""
+    found = re.search(r"versionName=(\d+)", dumpsys)
+    return int(found.group(1)) if found else None
+
+
+def moved_by_talkback(records):
+    """Whether what a key produced is TalkBack moving its focus. When TalkBack doesn't take the key the
+    app gets an arrow key: input focus moves first and accessibility focus follows it."""
+    kinds = [r["kind"] for r in records if r["kind"] in ("input", "focus")]
+    return "focus" in kinds and kinds[0] == "focus"
 
 
 def key_reports(modifier, action):

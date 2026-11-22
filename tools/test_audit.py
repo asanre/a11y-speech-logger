@@ -1,5 +1,6 @@
 """Rules over hand-written session lines. Run with `python3 -m unittest tools/test_audit.py`."""
 
+import argparse
 import json
 import re
 import sys
@@ -628,6 +629,22 @@ class TalkbackKeysTest(unittest.TestCase):
 
     def test_only_the_modifier_that_moved_focus_is_used_afterwards(self):
         self.assertEqual(audit.talkback_modifiers(audit.LEFT_META), (audit.LEFT_META,))
+
+    def test_search_is_tried_first_from_talkback_15(self):
+        self.assertEqual(audit.talkback_modifiers(None, 17), (audit.LEFT_META, audit.LEFT_ALT))
+        self.assertEqual(audit.talkback_modifiers(None, 13), (audit.LEFT_ALT, audit.LEFT_META))
+
+    def test_the_version_is_read_from_the_package(self):
+        self.assertEqual(audit.talkback_major("    versionName=17.0.0.889642762\n"), 17)
+        self.assertIsNone(audit.talkback_major("Unable to find package"))
+
+    def test_focus_that_followed_the_keyboard_was_not_moved_by_talkback(self):
+        """A key TalkBack doesn't take reaches the app as an arrow: input focus moves and accessibility focus follows."""
+        by_app = [audit.parse_record(f"[input] t=5 pkg={PKG} {OPTION}"), audit.parse_record(f"[focus] t=6 pkg={PKG} {OPTION}")]
+        by_talkback = [audit.parse_record(f"[focus] t=6 pkg={PKG} {OPTION}")]
+        self.assertFalse(audit.moved_by_talkback(by_app))
+        self.assertTrue(audit.moved_by_talkback(by_talkback))
+        self.assertFalse(audit.moved_by_talkback([]))
 
     def test_first_adds_ctrl_to_the_modifier(self):
         press, key, release = audit.key_reports(audit.LEFT_META, "first")

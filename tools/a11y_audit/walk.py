@@ -4,6 +4,7 @@ import argparse
 import datetime
 import json
 import shlex
+import shutil
 import subprocess
 import sys
 import threading
@@ -35,7 +36,7 @@ from .findings import rules
 from .keyboard import KEYBOARD_STUCK_STEPS, keyboard_ending
 from .records import dumps, joined, label, parse_record
 from .rules import activations, name_or_place
-from .talkback import PACKAGE, key_reports, talkback_modifiers
+from .talkback import PACKAGE, key_reports, moved_by_talkback, talkback_major, talkback_modifiers
 
 FOCUS_WINDOW_ACTION = f"{PACKAGE}.FOCUS_WINDOW"
 ACTIVATE_ACTION = f"{PACKAGE}.ACTIVATE"
@@ -159,6 +160,12 @@ def follow(log):
     return done
 
 
+def discard_session(folder, meta):
+    """Closes a session that captured the wrong thing and removes its folder, so it isn't taken as evidence."""
+    close_session(folder, meta)
+    shutil.rmtree(folder, ignore_errors=True)
+
+
 def close_session(folder, meta):
     """Disconnects the keyboard, stops copying the log and forgets the session."""
     for pid in (meta.get("relay"), meta.get("log")):
@@ -191,6 +198,10 @@ def first_window(serial, log):
         read_session(log, dumps=attempt + 1)
         if found := dumps(records_of(log)):
             return found[0][0]
+        # TalkBack's prompt to send notifications can come up seconds after TalkBack starts: the logger
+        # can't read it, and it covers the app.
+        if "permissioncontroller" in focused_window(serial):
+            adb(serial, "shell", "input", "keyevent", "KEYCODE_BACK")
         time.sleep(0.5)
         adb(serial, "shell", "am", "broadcast", "-a", DUMP_ACTION)
     return None
@@ -215,7 +226,9 @@ def start_session(serial, out, screen):
     relay = subprocess.Popen(["sh", "-c", f"tail -n +1 -f {shlex.quote(str(keys))} | "
                               f"{shlex.join(adb_cmd(serial, 'shell', 'hid', '-'))}"],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-    meta = {"serial": serial, "relay": relay.pid, "walk_from": -1, "pkg": None}
+    talkback = next((s for s in services.split(":") if "talkback" in s.casefold()), "").partition("/")[0]
+    meta = {"serial": serial, "relay": relay.pid, "walk_from": -1, "pkg": None,
+            "talkback": talkback_major(adb(serial, "shell", "dumpsys", "package", talkback))}
     # Written now, so `stop` can disconnect the keyboard if anything below fails.
     (folder / ".session.json").write_text(json.dumps(meta))
     ACTIVE_SESSION.parent.mkdir(parents=True, exist_ok=True)
@@ -280,12 +293,14 @@ def send_key(folder, meta, action, last_t):
     def moved(records):
         return any(r["kind"] == "focus" and r["t"] > last_t for r in records)
 
-    for modifier in talkback_modifiers(meta.get("modifier")):
+    for modifier in talkback_modifiers(meta.get("modifier"), meta.get("talkback")):
+        seen = len(records_of(log))
         with (folder / ".keys").open("a") as keys:
             for report in key_reports(modifier, action):
                 keys.write(json.dumps({"id": 1, "command": "report", "report": report}) + "\n")
-        _, did_move = wait_until(lambda: records_of(log), moved, TALKBACK_STEP_S)
-        if did_move:
+        produced, did_move = wait_until(lambda: records_of(log), moved, TALKBACK_STEP_S)
+        # Until TalkBack has taken a key with this modifier, focus that only followed the keyboard doesn't count.
+        if did_move and (meta.get("modifier") or moved_by_talkback(produced[seen:])):
             if meta.get("modifier") != modifier:
                 meta["modifier"] = modifier
                 (folder / ".session.json").write_text(json.dumps(meta))
@@ -363,13 +378,17 @@ def goto(folder, meta, text):
 
     hide_keyboard(meta["serial"])
     found = reached(press_once(folder, meta, "first", echo=False))
+    idle = 0
     for _ in range(GOTO_STEPS):
-        if found:
+        if found or idle >= KEYBOARD_STUCK_STEPS:
             break
         new = press_once(folder, meta, "next", echo=False)
         found = reached(new)
-        if not any(r["kind"] == "focus" and r.get("pkg") == meta["pkg"] for r in new):
+        focuses = [r for r in new if r["kind"] == "focus"]
+        if any(r.get("pkg") != meta["pkg"] for r in focuses):
             break
+        # A slow device can miss one key: only several in a row mean the walk is over.
+        idle = 0 if focuses else idle + 1
     if found:
         print(live_line(found), flush=True)
     return found

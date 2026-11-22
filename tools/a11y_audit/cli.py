@@ -88,7 +88,7 @@ from .findings import rules
 from .keyboard import input_focus_sequence, keyboard_ending
 from .records import dumps, label, parse_lines
 from .talkback import FOCUS_LOGGER, PACKAGE, TALKBACK_KEYS, setup_problems, with_logger, with_service, without_logger
-from .walk import follow, goto, open_session, output_dir, press_keys, start_session, stop_session
+from .walk import discard_session, follow, goto, open_session, output_dir, press_keys, start_session, stop_session
 
 # The release this command belongs to, and the APK it talks to; bump them with versionName and
 # versionCode in app/build.gradle.kts.
@@ -264,12 +264,13 @@ def stop(args):
 def walk(args, activate=()):
     """Walks the open screen with TalkBack from its first element, then activates each named element."""
     folder, meta = start_session(args.serial, args.out, args.screen)
+    print(window_line(meta))
+    app = getattr(args, "app", None)
+    if app and meta["pkg"] != app:
+        discard_session(folder, meta)
+        raise NotReady(f"the window on top belongs to {meta['pkg']} (\"{meta.get('window') or ''}\"), not to {app}, so "
+                       "nothing was captured: close it or open the app, then run the command again")
     try:
-        print(window_line(meta))
-        app = getattr(args, "app", None)
-        if app and meta["pkg"] != app:
-            raise NotReady(f"the window on top belongs to {meta['pkg']}, not to {app}: close it or open the app, "
-                           "then run the command again")
         press_keys(folder, meta, "first", 1)
         press_keys(folder, meta, "next", args.steps)
         for name in activate:
