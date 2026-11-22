@@ -817,6 +817,14 @@ class AdbProblemTest(unittest.TestCase):
         problem = audit.adb_problem("adb: device unauthorized.\nThis adb server's $ADB_VENDOR_KEYS is not set")
         self.assertIn("USB debugging", problem)
 
+    def test_an_apk_signed_with_another_key(self):
+        failure = ("Performing Streamed Install\nadb: failed to install a11y-speech-logger.apk: Failure "
+                   "[INSTALL_FAILED_UPDATE_INCOMPATIBLE: Existing package io.github.asanre.a11ylogger signatures "
+                   "do not match newer version; ignoring!]")
+        problem = audit.adb_problem(failure)
+        self.assertIn("adb uninstall io.github.asanre.a11ylogger", problem)
+        self.assertIn("a11y-audit setup", problem)
+
     def test_anything_else_is_quoted(self):
         self.assertIn("closed", audit.adb_problem("error: closed\n"))
 
