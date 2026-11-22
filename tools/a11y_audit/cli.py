@@ -49,8 +49,14 @@
       `release` gives the device back when the audit is over: turns A11y Focus Logger off and
       restores the default text-to-speech engine. Both keep the other accessibility services.
 
+  a11y-audit preview <tree.json or folder> [--out audits]
+      Audits a screen from its code, with no device: runs the rules over the component tree that
+      `android preview render <module> --component-tree --output <folder> --fqn <preview>` writes, and
+      measures contrast on the image next to it. Each finding points at its file and line.
+
   a11y-audit rules <dir>
-      Parses <dir>/session.txt and writes <dir>/findings.json.
+      Parses <dir>/session.txt and writes <dir>/findings.json and report-draft.md, the report laid
+      out with what is left to judge.
 
 Exit status: 0 when the command ran, with or without findings; 2 when the device or the session
 isn't ready, with the command that fixes it.
@@ -59,6 +65,8 @@ Only needs Python 3 and adb. The log format is described in the README.
 """
 
 import argparse
+import json
+import shutil
 import sys
 import tempfile
 import time
@@ -86,6 +94,7 @@ from .device import (
 )
 from .findings import rules
 from .keyboard import input_focus_sequence, keyboard_ending
+from .preview import preview_lines
 from .records import dumps, label, parse_lines
 from .talkback import FOCUS_LOGGER, PACKAGE, TALKBACK_KEYS, setup_problems, with_logger, with_service, without_logger
 from .walk import discard_session, follow, goto, open_session, output_dir, press_keys, start_session, stop_session
@@ -326,6 +335,33 @@ def capture(args):
     rules(argparse.Namespace(dir=folder))
 
 
+def component_trees(path):
+    """(file, tree) for each component tree in the file or folder given."""
+    files = sorted(Path(path).rglob("*.json")) if Path(path).is_dir() else [Path(path)]
+    for file in files:
+        try:
+            tree = json.loads(file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(tree, dict) and "components" in tree:
+            yield file, tree
+
+
+def preview(args):
+    found = list(component_trees(args.path))
+    if not found:
+        raise NotReady(f"{args.path} holds no component tree; render one with `android preview render <module> "
+                       "--component-tree --output <folder> --fqn <preview>`")
+    for file, tree in found:
+        folder = output_dir(args.out, f"{tree.get('previewId') or file.stem}-preview")
+        (folder / "session.txt").write_text("\n".join(preview_lines(tree)) + "\n", encoding="utf-8")
+        image = file.with_suffix(".png")
+        if image.exists():
+            shutil.copyfile(image, folder / "screen-end.png")
+        print(f"saved {folder}")
+        rules(argparse.Namespace(dir=folder))
+
+
 def keyboard(args):
     services = adb(args.serial, "shell", "settings", "get", "secure", "enabled_accessibility_services")
     if "talkback" in services.casefold():
@@ -419,6 +455,10 @@ def main():
     key.add_argument("--out", default="audits", help="base folder (default: audits)")
     key.add_argument("--serial", help="adb device serial, when more than one is connected")
     key.set_defaults(func=keyboard)
+    pre_ = sub.add_parser("preview", help="run the rules over a Compose preview's component tree, with no device")
+    pre_.add_argument("path", help="a component tree (.json) or a folder of them, from `android preview render --component-tree`")
+    pre_.add_argument("--out", default="audits", help="base folder (default: audits)")
+    pre_.set_defaults(func=preview)
     rul = sub.add_parser("rules", help="run the rules over a captured folder")
     rul.add_argument("dir", help="folder with session.txt")
     rul.set_defaults(func=rules)

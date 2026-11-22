@@ -132,7 +132,7 @@ def finding(rule, source, node=None, detail=None, t=None, conformance=None):
         "conformance": conformance or RULES[rule]["conformance"],
         "source": source,
         "t": t,
-        "node": {k: node[k] for k in ("id", "class", "text", "desc", "bounds", "size") if k in node} if node else None,
+        "node": {k: node[k] for k in ("id", "class", "text", "desc", "bounds", "size", "src") if k in node} if node else None,
         "detail": detail,
     }
 
@@ -365,6 +365,23 @@ def activations(records, app_pkg):
         shown = dumps_of_app(after, app_pkg)
         gone = not any(same_element(n, click) for n in shown[0]) if shown else None
         yield click, moves, gone
+
+
+def activation_summaries(records, app_pkg):
+    """Each activation for the report: the element, what focus did and what TalkBack said before the
+    user's next move."""
+    outcomes = {id(click): (moves, gone) for click, moves, gone in activations(records, app_pkg)}
+    for i, click in enumerate(records):
+        if click["kind"] != "click" or click.get("pkg") != app_pkg:
+            continue
+        said = [r["text"] for r in until_next_move(records, i) if r["kind"] in ("speech", "announce") and r.get("text")]
+        if id(click) not in outcomes:
+            focus = "a new window opened"
+        else:
+            moves, gone = outcomes[id(click)]
+            focus = (f"focus moved to {', then '.join(name_or_place(m) for m in moves)}" if moves
+                     else "focus lost" if gone else "focus stayed")
+        yield {"element": name_or_place(click), "focus": focus, "said": said}
 
 
 def unannounced(records, app_pkg):
@@ -612,6 +629,7 @@ def run_rules(records, screenshot=None):
         "findings": findings,
         "titles": titles,
         "appeared": appeared,
+        "activations": list(activation_summaries(records, app_pkg)),
         "atf": {k: v for k, v in atf_run.items() if k in ("results", "skipped", "reason", "error")} if atf_run else None,
         "timeline": timeline,
         "tree": tree,
