@@ -190,9 +190,19 @@ a11y-audit capture checkout --auto   # the same, walking with TalkBack on its ow
 a11y-audit capture checkout --now    # the screen as it is: tree, ATF and contrast, no walk
 a11y-audit audit checkout --app com.example.shop --activate "Sort"   # set up, walk, activate, save, release
 a11y-audit doctor             # what isn't ready on the device, and the command that fixes it
+a11y-audit preview build/previews   # no device: the rules over a Compose preview's component tree
 a11y-audit keyboard checkout  # walks the screen with TAB, TalkBack off
 a11y-audit rules audits/2026-10-01/checkout   # re-run the rules on an existing capture
 ```
+
+Every capture also gets `report-draft.md`: the report laid out from the findings, with the conformance
+table filled where a rule decides, each problem with its elements and what TalkBack said on them, and
+what is left to judge marked `?`. The agent starts from it instead of from `findings.json`.
+
+`preview` needs no device: render a `@Preview` with `android preview render <module> --component-tree
+--output <folder> --fqn <preview>` and pass the folder. The rules read the semantics Compose builds and
+the contrast of the image, and each finding names its file and line. It has no speech, no focus and no
+touch targets.
 
 `capture` warns you if the engine or the service isn't active. While you walk the screen it prints
 each focus and what TalkBack says, one short line each, since TalkBack itself is silent. It writes

@@ -10,7 +10,10 @@ tracker is read or written. Use the evidence there is, best first:
 
 1. **A capture** taken after the fix (`audits/<date>/<screen>/`). If there is none, check whether a device
    is connected (`adb devices`).
-2. **A targeted capture.** With a device, ask the user for one and tell them exactly what to do:
+2. **A targeted capture.** With a device, take it yourself: `a11y-audit audit <screen> --app <package>
+   --activate "<the element>"` for what TalkBack says or does, or `a11y-audit setup`,
+   `a11y-audit capture <screen> --now`, `a11y-audit release` for the element's own fields. Only when
+   the state can't be reached that way, ask the user for one and tell them exactly what to do:
    - the command, `a11y-audit capture <screen>`, or `keyboard <screen>` for keyboard issues;
    - the screen and state to open;
    - the elements to swipe to, in order;
