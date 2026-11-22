@@ -18,6 +18,14 @@ Pick one path from what you have, open its file and follow it step by step:
 A capture shows what TalkBack really said: prefer it. The Code path finds less, and everything it
 finds is *from code, not verified on device*.
 
+## The command
+
+`a11y-audit` ships with this skill: it is `scripts/audit.py`, in the folder that holds this file.
+Wherever a file of these skills or an error message says `a11y-audit <args>`, run
+`python3 <this skill's folder>/scripts/audit.py <args>`. It needs Python 3.9 or later and `adb`,
+nothing else. Use that one even when an `a11y-audit` is on the PATH: the one on the PATH can be an
+older version.
+
 ## Rules for every path
 
 - Run only `a11y-audit` and the commands the files give. Don't read the tool's source and don't swap a

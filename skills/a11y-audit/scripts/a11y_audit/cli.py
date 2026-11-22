@@ -395,7 +395,7 @@ def keyboard(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(prog="a11y-audit", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(required=True)
     cap = sub.add_parser("capture", help="capture a screen and run the rules")
     cap.add_argument("screen", help="name for the screen, used as folder name")

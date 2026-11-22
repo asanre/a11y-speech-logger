@@ -5,6 +5,8 @@ description: Checks whether a reported accessibility issue on an Android screen 
 
 # Retest of an accessibility issue
 
+`a11y-audit` is the command that ships with the `a11y-audit` skill: its *The command* section says how to run it.
+
 The issue arrives as text in any format: an audit finding, a ticket pasted by the user, a file. No issue
 tracker is read or written. Use the evidence there is, best first:
 

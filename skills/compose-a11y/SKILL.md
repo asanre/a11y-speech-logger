@@ -26,7 +26,7 @@ description: Use when writing or fixing Jetpack Compose UI for accessibility, wh
 ## How to verify a fix
 
 1. **Write down the expected speech first**, as "name, role, state" (for example "Wi-Fi, Switch, On"; TalkBack's order varies with its version and settings), then check it on a device.
-2. **Capture with `a11y-audit`, when installed.** With TalkBack on and the logger set up, run `a11y-audit capture <screen>`, walk the screen, press Enter, then `a11y-audit rules audits/<date>/<screen>` to re-run the rules. Compare the spoken lines in `findings.json` (`timeline`) with the expected speech.
+2. **Capture with `a11y-audit`**, the command that ships with the `a11y-audit` skill (its *The command* section says how to run it). With a device, `a11y-audit audit <screen> --app <package> --activate "<element>"` walks the screen with TalkBack and prints what it said on each element and what focus did after the activation. Compare those lines with the expected speech. Without a device, render a preview and run `a11y-audit preview <folder>`: it shows the name, role and state the composable exposes.
 3. **Guard against regressions in Compose UI tests** with `enableAccessibilityChecks()` (Compose 1.8.0+, dependency `androidx.compose.ui:ui-test-junit4-accessibility`). It runs the Accessibility Test Framework, the same checks the capture tool runs on its last tree dump: missing labels, contrast, small touch targets, traversal order. Any action, or `tryPerformAccessibilityChecks()`, runs them.
 
 ```kotlin
